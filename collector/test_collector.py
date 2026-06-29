@@ -685,6 +685,35 @@ class TestAnalyzer:
         assert pressure["triggered"]
         assert pressure["metadata"]["utilization"] > 0.85
 
+    def test_project_extraction_groups_by_workspace(self, tmp_path):
+        """Sessions from the same workspace path should be grouped into one project."""
+        from aiq_collector.analyzer import Analyzer
+        from aiq_collector.models import Session, SessionRequest
+
+        # Two sessions in the same project, one in a different project
+        sessions = [
+            Session(workspace_name="proj-a", workspace_path="/home/user/proj-a", requests=[
+                SessionRequest(message="Implement feature X", message_length=20, model="claude-sonnet-4-6", input_tokens=10000, output_tokens=5000),
+            ]),
+            Session(workspace_name="proj-a", workspace_path="/home/user/proj-a", requests=[
+                SessionRequest(message="Fix bug Y", message_length=12, model="claude-sonnet-4-6", input_tokens=8000, output_tokens=3000),
+            ]),
+            Session(workspace_name="proj-b", workspace_path="/home/user/proj-b", requests=[
+                SessionRequest(message="Write tests", message_length=10, model="claude-sonnet-4-6", input_tokens=5000, output_tokens=2000),
+            ]),
+        ]
+        metrics = Analyzer().analyze(sessions)
+        projects = metrics["projects"]
+        assert len(projects) == 2
+        proj_a = next(p for p in projects if p["project_name"] == "proj-a")
+        assert proj_a["sessions"] == 2
+        assert proj_a["requests"] == 2
+        assert proj_a["ai_loc"] >= 0
+        # Project IDs should be deterministic
+        assert proj_a["project_id"] == Analyzer.project_id_from_path("/home/user/proj-a")
+        # Projects sorted by cost descending
+        assert projects[0]["estimated_cost_usd"] >= projects[1]["estimated_cost_usd"]
+
     def test_json_serializable(self, tmp_path):
         """The metrics dict must be fully JSON-serializable."""
         project_dir = tmp_path / "-app"

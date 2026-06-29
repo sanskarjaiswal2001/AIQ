@@ -10,6 +10,7 @@ Stdlib-only.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -92,6 +93,7 @@ class Analyzer:
         model_usage = aggregate_model_usage(sessions)
         work_types = self._build_work_types(sessions)
         activity = self._build_activity(sessions)
+        projects = self._build_projects(sessions)
 
         return {
             "employee_id": employee_id,
@@ -104,10 +106,102 @@ class Analyzer:
             "model_usage": model_usage,
             "work_types": work_types,
             "activity": activity,
+            "projects": projects,
             "plan_context": plan_context,
         }
 
     # -- plan-aware anti-patterns ------------------------------------------
+
+    @staticmethod
+    def project_id_from_path(workspace_path: str) -> str:
+        """Deterministic project ID from decoded workspace path (SHA-256, first 12 hex)."""
+        if not workspace_path:
+            return "unknown"
+        return hashlib.sha256(workspace_path.encode("utf-8")).hexdigest()[:12]
+
+    def _build_projects(self, sessions: list[Session]) -> list[dict[str, Any]]:
+        """Group sessions by project (decoded workspace path) and aggregate per-project metrics.
+
+        This is the core of project-level financial intelligence: it clubs sessions
+        from the same workspace together so the mothership can later cross-reference
+        across employees working on the same project.
+        """
+        projects: dict[str, dict[str, Any]] = defaultdict(lambda: {
+            "project_id": "",
+            "project_name": "",
+            "project_path": "",
+            "sessions": 0,
+            "requests": 0,
+            "ai_loc": 0,
+            "user_loc": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "first_activity": "",
+            "last_activity": "",
+            "active_days": set(),
+            "models": Counter(),
+            "work_types": Counter(),
+            "git_branches": set(),
+            "files_edited": set(),
+        })
+
+        for s in sessions:
+            ws_path = s.workspace_path or s.workspace_name or "unknown"
+            pid = self.project_id_from_path(ws_path)
+            proj = projects[pid]
+            proj["project_id"] = pid
+            proj["project_name"] = s.workspace_name or "unknown"
+            proj["project_path"] = ws_path
+            proj["sessions"] += 1
+            proj["requests"] += s.request_count
+            proj["ai_loc"] += s.total_ai_loc
+            proj["user_loc"] += sum(r.user_loc for r in s.requests)
+            proj["input_tokens"] += s.total_input_tokens
+            proj["output_tokens"] += s.total_output_tokens
+            proj["estimated_cost_usd"] += sum(estimate_request_cost(r) for r in s.requests)
+            if s.git_branch:
+                proj["git_branches"].add(s.git_branch)
+            for r in s.requests:
+                proj["models"][r.model or "<synthetic>"] += 1
+                proj["work_types"][classify_work_type(r.message)] += 1
+                proj["files_edited"].update(r.edited_files)
+                dt = r.timestamp_dt
+                if dt:
+                    day = dt.strftime("%Y-%m-%d")
+                    proj["active_days"].add(day)
+                    day_str = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if not proj["first_activity"] or day_str < proj["first_activity"]:
+                        proj["first_activity"] = day_str
+                    if not proj["last_activity"] or day_str > proj["last_activity"]:
+                        proj["last_activity"] = day_str
+
+        # Finalize — convert sets/Counters to serializable structures
+        result: list[dict[str, Any]] = []
+        for pid, proj in projects.items():
+            result.append({
+                "project_id": proj["project_id"],
+                "project_name": proj["project_name"],
+                "project_path": proj["project_path"],
+                "sessions": proj["sessions"],
+                "requests": proj["requests"],
+                "ai_loc": proj["ai_loc"],
+                "user_loc": proj["user_loc"],
+                "input_tokens": proj["input_tokens"],
+                "output_tokens": proj["output_tokens"],
+                "estimated_cost_usd": round(proj["estimated_cost_usd"], 4),
+                "first_activity": proj["first_activity"],
+                "last_activity": proj["last_activity"],
+                "active_days": len(proj["active_days"]),
+                "model_usage": dict(proj["models"]),
+                "work_types": dict(proj["work_types"]),
+                "git_branches": sorted(proj["git_branches"]),
+                "files_edited_count": len(proj["files_edited"]),
+            })
+        result.sort(key=lambda p: p["estimated_cost_usd"], reverse=True)
+        return result
+
+    # -- plan-aware anti-patterns (continued)
 
     def _build_plan_anti_patterns(self, summary: dict[str, Any], plan_context: dict[str, Any]) -> list[dict[str, Any]]:
         """Synthetic rules that need billing/plan context, not just logs.
