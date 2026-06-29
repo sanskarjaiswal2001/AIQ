@@ -187,6 +187,51 @@ def _employee_detail_payload(employee_id: str) -> dict[str, Any] | None:
             ap.setdefault("rule_group", rule["group"])
             ap["description"] = rule.get("description", "")
             ap["suggestion"] = rule.get("suggestion", "")
+
+    # Add the employee's project membership so /me can explain where their AI work went.
+    employee_projects = []
+    for p in db.get_all_projects():
+        for pe in p.get("employees") or []:
+            if pe.get("employee_id") == employee_id:
+                employee_projects.append({
+                    "project_id": p.get("project_id"),
+                    "project_name": p.get("project_name"),
+                    "team": p.get("team") or pe.get("team"),
+                    "client": p.get("client"),
+                    "billing_code": p.get("billing_code"),
+                    "sessions": pe.get("sessions") or 0,
+                    "requests": pe.get("requests") or 0,
+                    "ai_loc": pe.get("ai_loc") or 0,
+                    "cost_usd": pe.get("cost_usd") or 0,
+                    "active_days": pe.get("active_days") or 0,
+                    "project_total_cost_usd": p.get("total_cost_usd") or 0,
+                    "project_people": len(p.get("employees") or []),
+                })
+    employee_projects.sort(key=lambda p: p["cost_usd"], reverse=True)
+    detail["projects"] = employee_projects
+
+    # Add cost-engine interpretation and specific plan-fit recommendation.
+    try:
+        from cost_engine import analyze_plan_fit, interpret_cost
+
+        scores = detail.get("practice_scores") or {}
+        vals = []
+        for key in ["prompt-quality", "session-hygiene", "code-review", "tool-mastery", "context-management"]:
+            v = scores.get(key)
+            if isinstance(v, dict):
+                raw_score = v.get("score", 0) or 0
+            else:
+                raw_score = v or 0
+            vals.append(float(raw_score))
+        overall = sum(vals) / len(vals) if vals else 0.0
+        summary = detail.get("summary") or {}
+        plan_context = detail.get("plan_context") or {}
+        detail["cost_interpretation"] = interpret_cost(summary, plan_context)
+        detail["plan_fit"] = analyze_plan_fit(summary, plan_context, overall)
+    except Exception:
+        # Keep employee detail resilient even if the catalog/cost engine is unavailable.
+        detail["cost_interpretation"] = {}
+        detail["plan_fit"] = {}
     return detail
 
 

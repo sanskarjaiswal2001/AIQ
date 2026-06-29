@@ -205,7 +205,7 @@ function distItem(label, count, cls) {
 }
 
 function emptyRow(msg) { return `<div style="padding:20px;text-align:center;color:var(--text-dim)">${msg}</div>`; }
-function emptyState(msg) { return `<div class="empty-state"><div class="es-icon">📭</div><p>${msg}</p></div>`; }
+function emptyState(msg) { return `<div class="empty-state"><div class="es-icon">--</div><p>${msg}</p></div>`; }
 
 function planClass(rec) {
   if (rec === 'upgrade') return 'upgrade';
@@ -270,9 +270,9 @@ async function renderExecutive() {
         ${statCard('Cost / Request', `$${(t.cost_per_request || 0).toFixed(2)}`, 'blended')}
       </div>
       <div class="exec-actions">
-        <a class="btn" href="/api/org/export/projects.csv" target="_blank">⬇ Export Projects CSV</a>
-        <a class="btn" href="/api/org/export/projects.csv?masked=true" target="_blank">🔒 Export Masked CSV</a>
-        <a class="btn" href="/api/org/investor-view?reveal_financials=false" target="_blank">👁 Masked Investor JSON</a>
+        <a class="btn" href="/api/org/export/projects.csv" target="_blank">Export Projects CSV</a>
+        <a class="btn" href="/api/org/export/projects.csv?masked=true" target="_blank">Export Masked CSV</a>
+        <a class="btn" href="/api/org/investor-view?reveal_financials=false" target="_blank">Masked Investor JSON</a>
       </div>
       <div class="card-grid two-col">
         <div class="card card-wide">
@@ -447,7 +447,7 @@ async function openEmployeeModal(employeeId) {
         <div class="mp-desc">${esc(p.description || '')}</div>
         ${p.examples?.length ? `<div class="mp-examples">Examples: ${p.examples.slice(0, 3).map(e => `<code>${esc(e)}</code>`).join(' ')}</div>` : ''}
       </div>
-    `).join('') : '<div style="color:var(--text-dim);padding:12px">No anti-patterns detected 🎉</div>';
+    `).join('') : '<div style="color:var(--text-dim);padding:12px">No anti-patterns detected</div>';
 
     const modelRows = Object.entries(modelUsage).sort((a, b) => (b[1].requests || 0) - (a[1].requests || 0)).map(([model, info]) => `
       <div class="model-row">
@@ -467,7 +467,7 @@ async function openEmployeeModal(employeeId) {
           <div class="rec-module">${esc(t.module)}</div>
         </div>
       </div>
-    `).join('') : '<div style="color:var(--text-dim);padding:12px">No training needed 🎉</div>';
+    `).join('') : '<div style="color:var(--text-dim);padding:12px">No training needed</div>';
 
     const planHTML = `
       <div class="plan-recommendation-box">
@@ -508,7 +508,7 @@ async function openEmployeeModal(employeeId) {
     `;
   } catch (e) {
     console.error('Modal error:', e);
-    body.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><h3>Failed to load</h3><p>${esc(e.message)}</p></div>`;
+    body.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Failed to load</h3><p>${esc(e.message)}</p></div>`;
   }
 }
 
@@ -542,13 +542,13 @@ async function renderTraining() {
     }
 
     const trackIcons = {
-      'Prompt Engineering': '✍️',
-      'AI Code Review': '🔍',
-      'Model & Tool Selection': '🤖',
-      'Agent Orchestration': '🔄',
-      'Context Engineering': '🧩',
-      'Workflow Optimization': '⚙️',
-      'Work-Life Balance': '⚖️',
+      'Prompt Engineering': 'PE',
+      'AI Code Review': 'CR',
+      'Model & Tool Selection': 'MT',
+      'Agent Orchestration': 'AO',
+      'Context Engineering': 'CE',
+      'Workflow Optimization': 'WO',
+      'Work-Life Balance': 'WB',
     };
 
     const container = document.getElementById('trainingMatrix');
@@ -559,7 +559,7 @@ async function renderTraining() {
     }
     container.innerHTML = trackEntries.map(([track, modules]) => `
       <div class="matrix-track">
-        <h3><span class="track-icon">${trackIcons[track] || '📚'}</span> ${esc(track)}</h3>
+        <h3><span class="track-icon">${trackIcons[track] || 'TR'}</span> ${esc(track)}</h3>
         <div class="matrix-employees">
           ${Object.entries(modules).map(([module, emps]) => `
             <div class="matrix-emp-row">
@@ -714,9 +714,9 @@ function projectCard(p) {
         <div class="pc-cost">${fmtCost(p.total_cost_usd)}</div>
       </div>
       <div class="pc-meta">
-        ${team ? `<span class="pc-meta-item">👥 ${esc(team)}</span>` : ''}
-        ${p.client ? `<span class="pc-meta-item">🏢 ${esc(p.client)}</span>` : ''}
-        <span class="pc-meta-item">📁 ${esc(p.project_path || '')}</span>
+        ${team ? `<span class="pc-meta-item">Team: ${esc(team)}</span>` : ''}
+        ${p.client ? `<span class="pc-meta-item">Client: ${esc(p.client)}</span>` : ''}
+        <span class="pc-meta-item">Path: ${esc(p.project_path || '')}</span>
       </div>
       <div class="pc-stats">
         <div class="pc-stat"><div class="pc-stat-val">${fmtNum(p.total_requests)}</div><div class="pc-stat-label">Requests</div></div>
@@ -724,7 +724,7 @@ function projectCard(p) {
         <div class="pc-stat"><div class="pc-stat-val">${employees.length}</div><div class="pc-stat-label">People</div></div>
         <div class="pc-stat"><div class="pc-stat-val">${p.active_days || 0}</div><div class="pc-stat-label">Active Days</div></div>
       </div>
-      <div class="pc-period">📅 ${fmtDate(p.first_activity)} → ${fmtDate(p.last_activity)}</div>
+      <div class="pc-period">${fmtDate(p.first_activity)} to ${fmtDate(p.last_activity)}</div>
       ${topWorkTypes ? `<div class="pc-work-types">${topWorkTypes}</div>` : ''}
     </div>
   `;
@@ -769,7 +769,7 @@ async function openProjectModal(projectId) {
           <div class="pmi-value" style="font-size:12px;font-family:'SF Mono','Monaco','Cascadia Code',monospace">${esc(p.project_path || '—')}</div>
         </div>
       </div>
-      ${isUnassigned ? '<div class="unassigned-note">⚠️ This project has no team, client, or billing code assigned. An admin can assign these via the project metadata to enable proper cost tracking and attribution.</div>' : ''}
+      ${isUnassigned ? '<div class="unassigned-note">This project has no team, client, or billing code assigned. An admin can assign these via the project metadata to enable proper cost tracking and attribution.</div>' : ''}
     `;
 
     // Stat cards
@@ -867,7 +867,7 @@ async function openProjectModal(projectId) {
     `;
   } catch (e) {
     console.error('Project modal error:', e);
-    body.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><h3>Failed to load</h3><p>${esc(e.message)}</p></div>`;
+    body.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Failed to load</h3><p>${esc(e.message)}</p></div>`;
   }
 }
 
@@ -882,7 +882,7 @@ async function renderRules() {
         <div class="rc-info">
           <h4>${esc(r.name)}</h4>
           <p>${esc(r.description)}</p>
-          <div class="rc-suggestion">💡 ${esc(r.suggestion)}</div>
+          <div class="rc-suggestion">Suggestion: ${esc(r.suggestion)}</div>
         </div>
         <div class="rc-meta">
           <span class="rc-group">${esc(r.group)}</span>
@@ -930,6 +930,9 @@ async function renderMe() {
     const recs = emp.recommendations || {};
     const training = recs.training || [];
     const plan = recs.plan || {};
+    const planFit = emp.plan_fit || {};
+    const costInfo = emp.cost_interpretation || {};
+    const myProjects = emp.projects || [];
     const patterns = (emp.anti_patterns || []).filter(p => p.triggered);
     const scoreCards = [
       ['Prompt Quality', scores['prompt-quality']],
@@ -943,10 +946,35 @@ async function renderMe() {
     }).join('');
     const trainingHTML = training.length ? training.map(t => `
       <div class="rec-item"><span class="rec-priority ${t.priority}">${t.priority}</span><div class="rec-content"><div class="rec-track">${esc(t.track)}</div><div class="rec-module">${esc(t.module)}</div></div></div>
-    `).join('') : '<div style="color:var(--text-dim);padding:12px">No training needed 🎉</div>';
+    `).join('') : '<div style="color:var(--text-dim);padding:12px">No training needed</div>';
     const patternHTML = patterns.length ? patterns.slice(0, 8).map(p => `
       <div class="modal-pattern ${severityClass(p.severity)}"><div class="mp-header"><span class="mp-name">${esc(p.rule_name)}</span><span class="mp-stats">${p.occurrences} · ${p.severity}</span></div><div class="mp-desc">${esc(p.description || '')}</div></div>
-    `).join('') : '<div style="color:var(--text-dim);padding:12px">No anti-patterns detected 🎉</div>';
+    `).join('') : '<div style="color:var(--text-dim);padding:12px">No anti-patterns detected</div>';
+    const projectHTML = myProjects.length ? `<div class="staff-table project-staffing">
+      <div class="staff-row header"><span>Project</span><span>Team</span><span>Req</span><span>Cost</span><span>AI LOC</span><span>Your role</span></div>
+      ${myProjects.map(p => `<div class="staff-row">
+        <span>${esc(p.project_name)}</span>
+        <span>${esc(p.team || '—')}</span>
+        <span>${fmtNum(p.requests || 0)}</span>
+        <span class="money">${fmtCost(p.cost_usd)}</span>
+        <span>${fmtNum(p.ai_loc || 0)}</span>
+        <span class="staff-rec">${p.project_people || 1} contributor${(p.project_people || 1) !== 1 ? 's' : ''} · ${p.active_days || 0} active days</span>
+      </div>`).join('')}
+    </div>` : emptyState('No project-level activity found yet.');
+    const planFitHTML = `
+      <div class="plan-recommendation-box">
+        <div>
+          <div class="prb-action" style="color:${planFit.recommendation === 'upgrade' ? 'var(--green)' : planFit.recommendation === 'train_first' ? 'var(--yellow)' : planFit.recommendation === 'downgrade' ? 'var(--orange)' : 'var(--accent)'}">${esc(planFit.recommendation || plan.action || 'maintain')}</div>
+          <div class="prb-reason">${esc(planFit.reason || plan.reason || 'Not enough data')}</div>
+        </div>
+        <span class="plan-badge ${planClass(planFit.recommendation || plan.action)}">${esc(planFit.recommended_plan_id || planFit.recommendation || plan.plan || 'current')}</span>
+      </div>
+      <div class="project-meta-grid" style="margin-top:12px">
+        <div class="project-meta-item"><div class="pmi-label">Cost Meaning</div><div class="pmi-value">${esc(costInfo.cost_label || 'Estimated Cost')}</div></div>
+        <div class="project-meta-item"><div class="pmi-label">Pressure</div><div class="pmi-value">${esc(costInfo.pressure_level || 'unknown')}</div></div>
+        <div class="project-meta-item"><div class="pmi-label">Utilization</div><div class="pmi-value">${costInfo.utilization != null ? `${Math.round((costInfo.utilization || 0) * 100)}%` : '—'}</div></div>
+        <div class="project-meta-item"><div class="pmi-label">Cost Change</div><div class="pmi-value">${planFit.projected_cost_change != null ? fmtCost(planFit.projected_cost_change) : '—'}</div></div>
+      </div>`;
 
     container.innerHTML = `
       <div class="stat-cards">
@@ -958,7 +986,8 @@ async function renderMe() {
       <div class="card-grid">
         <div class="card card-wide"><h3>Your Practice Scores</h3><div class="modal-scores">${scoreCards}</div></div>
         <div class="card card-wide"><h3>Your Training Recommendations</h3><div class="modal-recommendations">${trainingHTML}</div></div>
-        <div class="card card-wide"><h3>Your Plan Recommendation</h3><div class="plan-recommendation-box"><div class="prb-action">${esc(plan.action || '—')}</div><div class="prb-reason">${esc(plan.reason || 'Not enough data')}</div><span class="plan-badge ${planClass(plan.action || plan.recommendation)}">${esc(plan.action || plan.recommendation || 'N/A')}</span></div></div>
+        <div class="card card-wide"><h3>Your Plan Fit</h3>${planFitHTML}</div>
+        <div class="card card-wide"><h3>Your Projects (${myProjects.length})</h3>${projectHTML}</div>
         <div class="card card-wide"><h3>Your Anti-Patterns (${patterns.length})</h3><div class="modal-patterns">${patternHTML}</div></div>
       </div>
       <button class="btn btn-secondary" id="clearMeApiKey" style="margin-top:18px">Clear saved API key</button>
@@ -969,7 +998,7 @@ async function renderMe() {
     });
   } catch (e) {
     const isAuth = String(e.message || '').includes('401');
-    container.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><h3>Could not load personal dashboard</h3><p>${esc(e.message)}</p><div style="text-align:left;max-width:680px;margin:16px auto;color:var(--text-dim);line-height:1.7"><strong>Fix checklist:</strong><br>1. Make sure the mothership terminal is still running: <code>python scripts/aiq-mothership.py health --server-url ${esc(API_BASE)}</code><br>2. Make sure you registered: <code>aiq register --server-url ${esc(API_BASE)} --invite-code &lt;code&gt; --employee-id &lt;you&gt;</code><br>3. Run one collection: <code>aiq collect</code><br>4. Paste the <code>api_key</code> from <code>~/.aiq/config.toml</code> here again.${isAuth ? '<br><strong>The saved key looks invalid or belongs to another mothership.</strong>' : ''}</div><button class="btn btn-secondary" id="clearBadApiKey">Clear key</button></div>`;
+    container.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Could not load personal dashboard</h3><p>${esc(e.message)}</p><div style="text-align:left;max-width:680px;margin:16px auto;color:var(--text-dim);line-height:1.7"><strong>Fix checklist:</strong><br>1. Make sure the mothership terminal is still running: <code>python scripts/aiq-mothership.py health --server-url ${esc(API_BASE)}</code><br>2. Make sure you registered: <code>aiq register --server-url ${esc(API_BASE)} --invite-code &lt;code&gt; --employee-id &lt;you&gt;</code><br>3. Run one collection: <code>aiq collect</code><br>4. Paste the <code>api_key</code> from <code>~/.aiq/config.toml</code> here again.${isAuth ? '<br><strong>The saved key looks invalid or belongs to another mothership.</strong>' : ''}</div><button class="btn btn-secondary" id="clearBadApiKey">Clear key</button></div>`;
     document.getElementById('clearBadApiKey').addEventListener('click', () => {
       localStorage.removeItem('aiq_api_key');
       renderMe();
