@@ -6,7 +6,7 @@
 
 Track prompt quality, code review habits, model selection, and cost across your entire engineering org. Get actionable training recommendations and plan upgrade advice per employee.
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Custom](https://img.shields.io/badge/license-Commercial%20Source-orange)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED)](https://www.docker.com/)
 
@@ -134,6 +134,51 @@ Important:
 - If Python refuses global installs, create/use a virtual environment or use the repo's native installer; do not use sudo pip.
 - If Docker is not available, continue with native Python; Docker is optional.
 - At the end, report exactly what commands ran, where the repo is cloned, where the AIQ config is stored, and what dashboard URLs I should open.
+```
+
+### "Update my installed AIQ" agent prompt
+
+Paste this to a local coding agent to pull the latest AIQ changes and update the already-installed mothership and collector in place — without losing existing data, employees, or API keys:
+
+```text
+Update the already-installed AIQ on this machine to the latest version. Do not wipe data, employees, API keys, invites, or snapshots. Do not deploy to the cloud.
+
+Repository: https://github.com/sanskarjaiswal2001/AIQ
+
+Goal:
+- Pull the latest code into the existing AIQ clone.
+- Reinstall/refresh the mothership dependencies in place.
+- Reinstall the collector in place.
+- Restart the mothership so it serves the new code.
+- Verify the dashboard and /me still work with existing data.
+
+Use this flow:
+1. Find the existing AIQ clone. If unknown, search common locations and report which path you used.
+2. Pull the latest changes:
+   git -C <AIQ_DIR> pull --ff-only
+   If there are local modifications, stash them first and report it.
+3. Reinstall the mothership (re-creates venv only if dependencies changed):
+   python scripts/aiq-mothership.py install --venv <existing-venv> --data-dir <existing-data-dir>
+   On Windows: py scripts\\aiq-mothership.py install --venv <existing-venv> --data-dir <existing-data-dir>
+   Use the SAME venv and data-dir as before so data is preserved. Do not pass a new --admin-key unless the user asks.
+4. Reinstall the collector:
+   cd collector
+   python -m pip install -e . --force-reinstall --no-deps
+5. Stop the old mothership process and start the new one on the same host/port:
+   python scripts/aiq-mothership.py run --host 127.0.0.1 --port 8000 --venv <existing-venv> --data-dir <existing-data-dir>
+6. Wait for health:
+   python scripts/aiq-mothership.py health --server-url http://127.0.0.1:8000
+7. Verify data survived:
+   curl http://127.0.0.1:8000/api/employees
+   Report the employee count. It must match the pre-update count.
+8. Verify /me still loads for an existing employee using the key in ~/.aiq/config.toml.
+
+Important:
+- Do not delete or move the SQLite database (aiq.db under the data-dir).
+- Do not re-run `aiq register` for existing employees; their API key in ~/.aiq/config.toml must keep working.
+- If a migration is needed in the future, run it and report what changed; for now data should persist as-is.
+- If git pull fails due to local changes, stash, pull, and restore the stash; report any conflicts.
+- At the end, report: the AIQ path, git commit before and after, employee count before and after, and the dashboard URLs.
 ```
 
 ### Optional Docker deploy
@@ -349,4 +394,10 @@ Built on the data model and rule definitions from [Microsoft's AI-Engineering-Co
 
 ## License
 
-MIT
+AIQ Commercial Source License
+
+- **BETSOL PVT LTD and BETSOL Software India LTD** (and affiliates) may use AIQ commercially, free of charge — no paid license required.
+- **Individuals and non-profits** may use AIQ free of charge for personal, evaluation, educational, and open-source contribution purposes.
+- **Any other for-profit organization** must obtain a paid commercial license before commercial use. Contact the copyright holder for terms.
+
+See [LICENSE](LICENSE) for the full text.

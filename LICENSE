@@ -1,21 +1,83 @@
-MIT License
+AIQ Commercial Source License
 
-Copyright (c) 2026 Sanskar Jaiswal
+Copyright (c) 2026 Sanskar Jaiswal. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license grants free use of the AIQ software ("Software") to the
+following parties. Any use not covered below requires a separate paid
+commercial license from the copyright holder.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. FREE COMMERCIAL USE — BETSOL
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+   The following entities ("BETSOL") may use, copy, modify, merge, distribute,
+   and internally deploy the Software for commercial purposes, free of charge
+   and without any additional licensing fee:
+
+     • BETSOL PVT LTD
+     • BETSOL Software India LTD
+     • Any parent, subsidiary, or affiliate of the above entities
+
+   BETSOL may use the Software in production, internal tooling, and customer-
+   facing systems without purchasing a commercial license. This grant is
+   perpetual, royalty-free, and non-exclusive.
+
+   BETSOL may modify the Software for internal use but may not redistribute
+   or sublicense the modified source code outside BETSOL without the
+   copyright holder's written permission.
+
+2. FREE NON-COMMERCIAL USE — EVERYONE ELSE
+
+   Individuals and organizations other than BETSOL may use the Software free
+   of charge for the following purposes only:
+
+     • Personal, non-commercial use
+     • Evaluation, testing, and trial purposes
+     • Educational use
+     • Open-source contribution to this project
+
+   "Commercial use" means any use of the Software that directly or indirectly
+   generates revenue, supports a commercial product or service, or is used
+   within a for-profit organization's internal operations beyond evaluation.
+   This includes, but is not limited to: production deployments, internal
+   tooling at a for-profit company, use by contractors/consultants for paying
+   clients, and bundling the Software with a paid product or service.
+
+3. PAID COMMERCIAL LICENSE — OTHER COMPANIES
+
+   Any for-profit organization other than BETSOL that wishes to use the
+   Software for commercial purposes must obtain a paid commercial license
+   from the copyright holder before doing so. Contact the copyright holder
+   for licensing terms and pricing.
+
+4. REDISTRIBUTION
+
+   You may redistribute the Software in source or binary form, provided that:
+     • This license file is included unmodified in all copies.
+     • Recipients are bound by the same license terms.
+     • Redistribution does not grant the recipient a commercial license;
+       the recipient must independently qualify under Section 1, Section 2,
+       or obtain a paid commercial license under Section 3.
+
+5. CONTRIBUTIONS
+
+   Contributions to this project are accepted under the terms of this
+   license. By submitting a contribution, you grant the copyright holder a
+   perpetual, worldwide, non-exclusive, royalty-free license to use, modify,
+   and redistribute your contribution. Contributors do not gain any
+   commercial rights beyond those granted to the general public under
+   Section 2.
+
+6. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+   THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+7. TERMINATION
+
+   This license terminates automatically if you breach any of its terms.
+   Sections 1 and 2 grants terminate immediately upon any attempted
+   commercial use not permitted by this license.

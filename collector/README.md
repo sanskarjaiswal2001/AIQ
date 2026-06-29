@@ -107,4 +107,4 @@ The collector only sends **metrics**: scores, token counts, anti-pattern flags, 
 
 ## License
 
-MIT
+AIQ Commercial Source License — see the [root LICENSE](../LICENSE). Free for BETSOL commercial use and personal/evaluation use; other companies need a paid commercial license.
