@@ -587,6 +587,7 @@ def get_employee_detail(employee_id: str) -> dict[str, Any] | None:
             "model_usage": payload.get("model_usage") or {},
             "work_types": payload.get("work_types") or {},
             "activity": payload.get("activity") or {},
+            "plan_context": payload.get("plan_context") or {},
         }
 
         # Recommendations computed from the assembled data.
@@ -596,6 +597,7 @@ def get_employee_detail(employee_id: str) -> dict[str, Any] | None:
             "summary": detail["summary"],
             "practice_scores": detail["practice_scores"],
             "anti_patterns": anti_patterns,
+            "plan_context": detail.get("plan_context") or {},
         }
         detail["recommendations"] = recommendations_for_employee(rec_input)
         return detail

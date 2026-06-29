@@ -7,13 +7,32 @@ let allEmployees = [];
 let allRules = [];
 
 // ── API helpers ────────────────────────────────────────
-async function api(path) {
+async function api(path, opts = {}) {
   const headers = {};
   const apiKey = localStorage.getItem('aiq_api_key');
   if (apiKey) headers['X-API-Key'] = apiKey;
-  const res = await fetch(`${API_BASE}${path}`, { headers });
-  if (!res.ok) throw new Error(`API ${path} failed: ${res.status}`);
-  return res.json();
+  const timeoutMs = opts.timeoutMs || 15000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { headers, signal: controller.signal });
+    let detail = '';
+    if (!res.ok) {
+      try {
+        const body = await res.json();
+        detail = body.detail ? ` — ${body.detail}` : '';
+      } catch (_) {}
+      throw new Error(`API ${path} failed: ${res.status}${detail}`);
+    }
+    return res.json();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error(`API ${path} timed out after ${Math.round(timeoutMs / 1000)}s. Check that the mothership is still running and reachable.`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function apiPost(path, body) {
@@ -345,9 +364,9 @@ async function openEmployeeModal(employeeId) {
 
     const planHTML = `
       <div class="plan-recommendation-box">
-        <div class="prb-action" style="color:${plan.recommendation === 'upgrade' ? 'var(--green)' : plan.recommendation === 'train_first' ? 'var(--yellow)' : 'var(--accent)'}">${esc(plan.action || '—')}</div>
+        <div class="prb-action" style="color:${(plan.action || plan.recommendation) === 'upgrade' ? 'var(--green)' : (plan.action || plan.recommendation) === 'train_first' ? 'var(--yellow)' : 'var(--accent)'}">${esc(plan.action || '—')}</div>
         <div class="prb-reason">${esc(plan.reason || 'Not enough data')}</div>
-        <span class="plan-badge ${planClass(plan.recommendation)}">${esc(plan.recommendation || 'N/A')}</span>
+        <span class="plan-badge ${planClass(plan.action || plan.recommendation)}">${esc(plan.action || plan.recommendation || 'N/A')}</span>
       </div>
     `;
 
@@ -533,8 +552,9 @@ async function renderMe() {
   }
 
   showLoading(true);
+  container.innerHTML = `<div class="card card-wide"><h3>Loading your dashboard…</h3><p style="color:var(--text-dim)">Checking <code>/api/me</code>. If this takes more than a few seconds, verify the mothership is running and your API key is correct.</p></div>`;
   try {
-    const emp = await api('/api/me');
+    const emp = await api('/api/me', { timeoutMs: 12000 });
     const summary = emp.summary || {};
     const scores = emp.practice_scores || {};
     const recs = emp.recommendations || {};
@@ -568,7 +588,7 @@ async function renderMe() {
       <div class="card-grid">
         <div class="card card-wide"><h3>Your Practice Scores</h3><div class="modal-scores">${scoreCards}</div></div>
         <div class="card card-wide"><h3>Your Training Recommendations</h3><div class="modal-recommendations">${trainingHTML}</div></div>
-        <div class="card card-wide"><h3>Your Plan Recommendation</h3><div class="plan-recommendation-box"><div class="prb-action">${esc(plan.action || '—')}</div><div class="prb-reason">${esc(plan.reason || 'Not enough data')}</div><span class="plan-badge ${planClass(plan.recommendation)}">${esc(plan.recommendation || 'N/A')}</span></div></div>
+        <div class="card card-wide"><h3>Your Plan Recommendation</h3><div class="plan-recommendation-box"><div class="prb-action">${esc(plan.action || '—')}</div><div class="prb-reason">${esc(plan.reason || 'Not enough data')}</div><span class="plan-badge ${planClass(plan.action || plan.recommendation)}">${esc(plan.action || plan.recommendation || 'N/A')}</span></div></div>
         <div class="card card-wide"><h3>Your Anti-Patterns (${patterns.length})</h3><div class="modal-patterns">${patternHTML}</div></div>
       </div>
       <button class="btn btn-secondary" id="clearMeApiKey" style="margin-top:18px">Clear saved API key</button>
@@ -578,7 +598,8 @@ async function renderMe() {
       renderMe();
     });
   } catch (e) {
-    container.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><h3>Could not load personal dashboard</h3><p>${esc(e.message)}</p><button class="btn btn-secondary" id="clearBadApiKey">Clear key</button></div>`;
+    const isAuth = String(e.message || '').includes('401');
+    container.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><h3>Could not load personal dashboard</h3><p>${esc(e.message)}</p><div style="text-align:left;max-width:680px;margin:16px auto;color:var(--text-dim);line-height:1.7"><strong>Fix checklist:</strong><br>1. Make sure the mothership terminal is still running: <code>python scripts/aiq-mothership.py health --server-url ${esc(API_BASE)}</code><br>2. Make sure you registered: <code>aiq register --server-url ${esc(API_BASE)} --invite-code &lt;code&gt; --employee-id &lt;you&gt;</code><br>3. Run one collection: <code>aiq collect</code><br>4. Paste the <code>api_key</code> from <code>~/.aiq/config.toml</code> here again.${isAuth ? '<br><strong>The saved key looks invalid or belongs to another mothership.</strong>' : ''}</div><button class="btn btn-secondary" id="clearBadApiKey">Clear key</button></div>`;
     document.getElementById('clearBadApiKey').addEventListener('click', () => {
       localStorage.removeItem('aiq_api_key');
       renderMe();

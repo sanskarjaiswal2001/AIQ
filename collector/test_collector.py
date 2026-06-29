@@ -462,6 +462,18 @@ class TestRules:
         lazy = next(r for r in results if r.rule_id == "lazy-prompting")
         assert not lazy.triggered
 
+    def test_repeated_prompts_ignores_skill_backed_prompts(self):
+        """Reusable skills intentionally repeat templates and should not count as prompt waste."""
+        reqs = [
+            SessionRequest(message="Use the review skill to inspect this change", message_length=44, has_skills=True, skills_used=["review"])
+            for _ in range(8)
+        ]
+        s = Session(requests=reqs)
+        results = run_all_rules([s])
+        repeated = next(r for r in results if r.rule_id == "repeated-prompts")
+        assert not repeated.triggered
+        assert repeated.occurrences == 0
+
     def test_mega_sessions_triggers(self):
         s = Session(requests=[SessionRequest() for _ in range(55)])
         results = run_all_rules([s])
@@ -654,6 +666,24 @@ class TestAnalyzer:
         assert metrics["summary"]["total_requests"] == 0
         assert len(metrics["anti_patterns"]) == 20
         assert metrics["activity"]["daily"] == {}
+
+    def test_plan_context_adds_rolling_window_rule(self):
+        """Billing context should add plan-aware anti-patterns without changing base rule count."""
+        req = SessionRequest(
+            message="Implement the billing dashboard with tests",
+            message_length=42,
+            model="claude-sonnet-4-6",
+            input_tokens=4_000_000,
+            output_tokens=1_000_000,
+        )
+        metrics = Analyzer().analyze(
+            [Session(requests=[req])],
+            plan_context={"plan_type": "enterprise_rolling_window", "rolling_window_usd": 25, "rolling_window_days": 30},
+        )
+        assert metrics["plan_context"]["rolling_window_usd"] == 25
+        pressure = next(ap for ap in metrics["anti_patterns"] if ap["rule_id"] == "rolling-window-pressure")
+        assert pressure["triggered"]
+        assert pressure["metadata"]["utilization"] > 0.85
 
     def test_json_serializable(self, tmp_path):
         """The metrics dict must be fully JSON-serializable."""

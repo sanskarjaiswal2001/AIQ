@@ -151,6 +151,9 @@ pip install aiq-collector
 # Register with your mothership (get invite code from admin)
 aiq register --server-url http://localhost:8000 --invite-code YOUR_CODE --name "Jane Doe" --team "Engineering"
 
+# Optional: tell AIQ how this employee is billed (rolling-window seat vs API spend)
+aiq config --plan-type enterprise_rolling_window --plan-name "Claude Team" --rolling-window-usd 25 --rolling-window-days 30 --seat-cost-usd 25
+
 # Collect and push (one-time)
 aiq collect
 

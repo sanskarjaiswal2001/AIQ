@@ -159,7 +159,12 @@ def rule_repeated_prompts(sessions: list[Session]) -> DetectionResult:
     for _, r in reqs:
         if r.message_length == 0:
             continue
-        key = r.message[:60].strip().lower()
+        # Skills intentionally reuse prompt scaffolds/templates. Do not count
+        # skill-backed turns as repeated-prompt waste; otherwise healthy skill
+        # adoption gets misclassified as copy/paste prompting.
+        if r.has_skills or r.skills_used:
+            continue
+        key = re.sub(r"\s+", " ", r.message[:160].strip().lower())[:60]
         if not key:
             continue
         prefix_counts[key] += 1

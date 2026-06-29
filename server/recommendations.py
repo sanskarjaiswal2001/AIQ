@@ -30,6 +30,7 @@ TRAINING_MAP: dict[str, dict[str, str]] = {
     "premium-waste": {"track": "Model & Tool Selection", "module": "Cost-Aware Model Routing", "priority": "high"},
     "premium-for-lookup-questions": {"track": "Model & Tool Selection", "module": "Choosing the Right Model", "priority": "medium"},
     "model-overreliance": {"track": "Model & Tool Selection", "module": "Multi-Model Workflows", "priority": "medium"},
+    "rolling-window-pressure": {"track": "Model & Tool Selection", "module": "Rolling Window Budget Management", "priority": "high"},
 
     "runaway-agent-loops": {"track": "Agent Orchestration", "module": "Managing Agent Loops", "priority": "high"},
     "session-drift": {"track": "Agent Orchestration", "module": "Session Management", "priority": "medium"},
@@ -137,9 +138,13 @@ def recommend_plan(employee_data: dict[str, Any]) -> dict[str, Any]:
     """
     summary = employee_data.get("summary") or {}
     anti_patterns = employee_data.get("anti_patterns") or []
+    plan_context = employee_data.get("plan_context") or {}
 
     cost = float(summary.get("estimated_cost_usd", 0.0) or 0.0)
     requests = int(summary.get("total_requests", 0) or 0)
+    plan_type = str(plan_context.get("plan_type") or plan_context.get("billing_mode") or "api").lower()
+    rolling_window_usd = float(plan_context.get("rolling_window_usd", 0.0) or plan_context.get("quota_usd", 0.0) or 0.0)
+    is_rolling = "rolling" in plan_type
 
     # Overall score: prefer a precomputed value, else average the 5 scores.
     overall_score = employee_data.get("overall_score")
@@ -173,6 +178,38 @@ def recommend_plan(employee_data: dict[str, Any]) -> dict[str, Any]:
     model_overreliance_triggered = any(
         ap.get("rule_id") == "model-overreliance" and bool(ap.get("triggered", False)) for ap in anti_patterns
     )
+    rolling_pressure_triggered = any(
+        ap.get("rule_id") == "rolling-window-pressure" and bool(ap.get("triggered", False)) for ap in anti_patterns
+    )
+    rolling_utilization = (cost / rolling_window_usd) if rolling_window_usd > 0 else 0.0
+
+    # Rolling-window enterprise/team seats are not API invoices. Interpret
+    # estimated token cost as quota pressure. Upgrade only if the user is both
+    # high-efficiency and close to the rolling cap; otherwise train/model-route first.
+    if is_rolling and rolling_window_usd > 0:
+        if rolling_utilization >= 0.85 and overall_score >= 85 and not premium_waste_triggered:
+            return {
+                "action": "upgrade",
+                "plan": "higher_rolling_window",
+                "reason": f"High-efficiency user is using {rolling_utilization:.0%} of a ${rolling_window_usd:.0f} rolling window. Consider a higher quota/seat before they hit the cap.",
+            }
+        if rolling_pressure_triggered or rolling_utilization >= 0.85:
+            return {
+                "action": "train_first",
+                "plan": "maintain",
+                "reason": f"Rolling-window pressure detected ({rolling_utilization:.0%} of quota). Improve prompt reuse, skills, and model routing before increasing the window.",
+            }
+        if requests < 30:
+            return {
+                "action": "review",
+                "plan": "consider_downgrade",
+                "reason": "Low usage on a fixed/rolling seat. Consider seat sharing or a lower tier if this continues.",
+            }
+        return {
+            "action": "maintain",
+            "plan": "current",
+            "reason": f"Rolling-window usage is healthy ({rolling_utilization:.0%} of quota). Maintain current seat and monitor trend.",
+        }
 
     # High usage + high efficiency + high cost -> upgrade
     if requests > 200 and overall_score > 80 and cost > 50:

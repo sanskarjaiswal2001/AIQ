@@ -84,6 +84,14 @@ api_key = "ak_xxxxx"
 employee_id = "jane-doe"
 interval_hours = 6
 claude_dir = "~/.claude/projects"
+
+[plan]
+# api | seat | rolling_window | enterprise_rolling_window
+plan_type = "enterprise_rolling_window"
+plan_name = "Claude Team"
+rolling_window_usd = 25
+rolling_window_days = 30
+seat_cost_usd = 25
 ```
 
 ## Supported AI Tools

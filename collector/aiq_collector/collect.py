@@ -64,6 +64,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--quiet", action="store_true",
         help="Suppress the summary printed to stdout.",
     )
+    p.add_argument("--plan-type", default="", help="Billing plan type: api, seat, rolling_window, enterprise_rolling_window")
+    p.add_argument("--plan-name", default="", help="Human-readable plan name")
+    p.add_argument("--rolling-window-usd", type=float, default=None, help="Per-user rolling window/quota in USD-equivalent")
+    p.add_argument("--rolling-window-days", type=int, default=None, help="Rolling window length in days")
+    p.add_argument("--seat-cost-usd", type=float, default=None, help="Fixed monthly seat cost in USD")
     return p.parse_args(argv)
 
 
@@ -72,6 +77,7 @@ def collect_metrics(
     employee_id: str = "",
     period_start: str = "",
     period_end: str = "",
+    plan_context: dict | None = None,
 ) -> dict:
     """Parse logs and run the analyzer. Returns the metrics dict."""
     claude_path = os.path.expanduser(claude_dir) if claude_dir else os.path.expanduser("~/.claude/projects")
@@ -83,6 +89,7 @@ def collect_metrics(
         employee_id=employee_id,
         period_start=period_start,
         period_end=period_end,
+        plan_context=plan_context or {},
     )
 
 
@@ -130,6 +137,12 @@ def print_summary(metrics: dict) -> None:
     print(f"  Input tokens    : {s['total_input_tokens']:,}")
     print(f"  Output tokens   : {s['total_output_tokens']:,}")
     print(f"  Est. cost (USD) : ${s['estimated_cost_usd']:.4f}")
+    plan = metrics.get("plan_context") or {}
+    if plan:
+        bits = [plan.get("plan_name") or plan.get("plan_type") or "configured"]
+        if plan.get("rolling_window_usd"):
+            bits.append(f"${float(plan.get('rolling_window_usd') or 0):.0f} rolling window")
+        print(f"  Plan context    : {' · '.join(str(b) for b in bits if b)}")
     print("-" * 60)
 
     print("  Practice scores:")
@@ -167,11 +180,19 @@ def print_summary(metrics: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
+    plan_context = {
+        "plan_type": args.plan_type,
+        "plan_name": args.plan_name,
+        "rolling_window_usd": args.rolling_window_usd or 0,
+        "rolling_window_days": args.rolling_window_days or 0,
+        "seat_cost_usd": args.seat_cost_usd or 0,
+    }
     metrics = collect_metrics(
         claude_dir=args.claude_dir,
         employee_id=args.employee_id,
         period_start=args.period_start,
         period_end=args.period_end,
+        plan_context=plan_context,
     )
 
     if not args.quiet:

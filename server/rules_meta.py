@@ -202,6 +202,16 @@ RULES_META: list[dict] = [
         "suggestion": "Protect weekend rest; monitor for burnout signals.",
         "training": {"track": "Work-Life Balance", "module": "Sustainable AI Usage", "priority": "low"},
     },
+    # --- Plan Efficiency ---
+    {
+        "id": "rolling-window-pressure",
+        "name": "Rolling Window Pressure",
+        "group": "plan-efficiency",
+        "severity": "medium",
+        "description": "Estimated usage is close to or above a per-user rolling-window quota, such as a Claude team/enterprise seat window.",
+        "suggestion": "Before upgrading, check whether the pressure comes from valuable high-leverage work, repeated prompts, or poor model routing.",
+        "training": {"track": "Model & Tool Selection", "module": "Rolling Window Budget Management", "priority": "high"},
+    },
 ]
 
 # Quick lookup by rule id.

@@ -73,6 +73,7 @@ class Analyzer:
         employee_id: str = "",
         period_start: str = "",
         period_end: str = "",
+        plan_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run full analysis and return the dashboard-ingest JSON dict."""
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -86,6 +87,8 @@ class Analyzer:
         summary = self._build_summary(sessions)
         practice_scores = compute_practice_scores(sessions)
         anti_patterns = [r.to_dict() for r in run_all_rules(sessions)]
+        plan_context = plan_context or {}
+        anti_patterns.extend(self._build_plan_anti_patterns(summary, plan_context))
         model_usage = aggregate_model_usage(sessions)
         work_types = self._build_work_types(sessions)
         activity = self._build_activity(sessions)
@@ -101,7 +104,44 @@ class Analyzer:
             "model_usage": model_usage,
             "work_types": work_types,
             "activity": activity,
+            "plan_context": plan_context,
         }
+
+    # -- plan-aware anti-patterns ------------------------------------------
+
+    def _build_plan_anti_patterns(self, summary: dict[str, Any], plan_context: dict[str, Any]) -> list[dict[str, Any]]:
+        """Synthetic rules that need billing/plan context, not just logs.
+
+        Rolling-window enterprise seats (for example a Claude team/enterprise
+        seat with a $25 rolling window) behave differently from API billing:
+        the relevant signal is quota pressure, not token-estimated invoice.
+        """
+        if not plan_context:
+            return []
+        plan_type = str(plan_context.get("plan_type") or plan_context.get("billing_mode") or "").lower()
+        est_cost = float(summary.get("estimated_cost_usd", 0.0) or 0.0)
+        window_usd = float(plan_context.get("rolling_window_usd", 0.0) or plan_context.get("quota_usd", 0.0) or 0.0)
+        window_days = int(plan_context.get("rolling_window_days", 0) or 0)
+        out: list[dict[str, Any]] = []
+        if "rolling" in plan_type and window_usd > 0:
+            utilization = est_cost / window_usd
+            triggered = utilization >= 0.85
+            out.append({
+                "rule_id": "rolling-window-pressure",
+                "name": "Rolling Window Pressure",
+                "rule_name": "Rolling Window Pressure",
+                "group": "plan-efficiency",
+                "rule_group": "plan-efficiency",
+                "severity": "high" if utilization >= 1 else "medium",
+                "description": "Estimated usage is close to or above the employee rolling-window quota.",
+                "suggestion": "Review whether this user needs a higher seat/quota, workflow training, or better model routing before they hit the rolling cap.",
+                "triggered": triggered,
+                "occurrences": round(utilization * 100),
+                "total": 100,
+                "examples": [f"estimated ${est_cost:.2f} / ${window_usd:.2f}" + (f" per {window_days}d window" if window_days else " rolling window")],
+                "metadata": {"utilization": round(utilization, 4), "window_usd": window_usd, "window_days": window_days},
+            })
+        return out
 
     # -- summary ------------------------------------------------------------
 

@@ -103,6 +103,13 @@ api_key = "{server.get('api_key', '')}"
 employee_id = "{collector.get('employee_id', '')}"
 interval_hours = {collector.get('interval_hours', DEFAULT_INTERVAL_HOURS)}
 claude_dir = "{collector.get('claude_dir', '~/.claude/projects')}"
+
+[plan]
+plan_type = "{cfg.get('plan', {}).get('plan_type', '')}"
+plan_name = "{cfg.get('plan', {}).get('plan_name', '')}"
+rolling_window_usd = {cfg.get('plan', {}).get('rolling_window_usd', 0) or 0}
+rolling_window_days = {cfg.get('plan', {}).get('rolling_window_days', 0) or 0}
+seat_cost_usd = {cfg.get('plan', {}).get('seat_cost_usd', 0) or 0}
 '''
     path.write_text(content, encoding="utf-8")
     try:
@@ -125,6 +132,10 @@ def update_config(**kwargs: Any) -> dict[str, dict[str, Any]]:
         cfg["collector"]["claude_dir"] = kwargs["claude_dir"] or ""
     if kwargs.get("interval_hours") is not None:
         cfg["collector"]["interval_hours"] = kwargs["interval_hours"]
+    cfg.setdefault("plan", {})
+    for key in ["plan_type", "plan_name", "rolling_window_usd", "rolling_window_days", "seat_cost_usd"]:
+        if kwargs.get(key) is not None:
+            cfg["plan"][key] = kwargs[key]
     write_config(cfg)
     return cfg
 
@@ -170,12 +181,19 @@ def command_collect(args: argparse.Namespace) -> int:
     claude_dir = args.claude_dir or cfg.get("collector", {}).get("claude_dir", "")
     interval = args.interval or float(cfg.get("collector", {}).get("interval_hours", DEFAULT_INTERVAL_HOURS) or DEFAULT_INTERVAL_HOURS)
 
+    plan_context = dict(cfg.get("plan", {}) or {})
+    for key in ["plan_type", "plan_name", "rolling_window_usd", "rolling_window_days", "seat_cost_usd"]:
+        value = getattr(args, key, None)
+        if value is not None and value != "":
+            plan_context[key] = value
+
     def run_once() -> int:
         metrics = collect_metrics(
             claude_dir=claude_dir,
             employee_id=employee_id,
             period_start=args.period_start,
             period_end=args.period_end,
+            plan_context=plan_context,
         )
         if not args.quiet:
             print_summary(metrics)
@@ -247,13 +265,21 @@ def command_register(args: argparse.Namespace) -> int:
 
 
 def command_config(args: argparse.Namespace) -> int:
-    changed = any(v is not None for v in [args.server_url, args.api_key, args.employee_id, args.claude_dir, args.interval_hours])
+    changed = any(v is not None for v in [
+        args.server_url, args.api_key, args.employee_id, args.claude_dir, args.interval_hours,
+        args.plan_type, args.plan_name, args.rolling_window_usd, args.rolling_window_days, args.seat_cost_usd,
+    ])
     cfg = update_config(
         server_url=args.server_url,
         api_key=args.api_key,
         employee_id=args.employee_id,
         claude_dir=args.claude_dir,
         interval_hours=args.interval_hours,
+        plan_type=args.plan_type,
+        plan_name=args.plan_name,
+        rolling_window_usd=args.rolling_window_usd,
+        rolling_window_days=args.rolling_window_days,
+        seat_cost_usd=args.seat_cost_usd,
     ) if changed else read_config()
 
     print(f"Config: {CONFIG_PATH}")
@@ -265,6 +291,13 @@ def command_config(args: argparse.Namespace) -> int:
     print(f"employee_id = {cfg.get('collector', {}).get('employee_id', '') or '(unset)'}")
     print(f"interval_hours = {cfg.get('collector', {}).get('interval_hours', DEFAULT_INTERVAL_HOURS)}")
     print(f"claude_dir = {cfg.get('collector', {}).get('claude_dir', '~/.claude/projects')}")
+    plan = cfg.get('plan', {}) or {}
+    print("[plan]")
+    print(f"plan_type = {plan.get('plan_type', '') or '(unset)'}")
+    print(f"plan_name = {plan.get('plan_name', '') or '(unset)'}")
+    print(f"rolling_window_usd = {plan.get('rolling_window_usd', 0) or 0}")
+    print(f"rolling_window_days = {plan.get('rolling_window_days', 0) or 0}")
+    print(f"seat_cost_usd = {plan.get('seat_cost_usd', 0) or 0}")
     if changed:
         print("Updated.")
     return 0
@@ -528,6 +561,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_collect.add_argument("--daemon", action="store_true", help="Run forever and collect every interval")
     p_collect.add_argument("--interval", type=float, default=0, help="Daemon interval in hours (default from config or 6)")
     p_collect.add_argument("--quiet", action="store_true", help="Suppress summary output")
+    p_collect.add_argument("--plan-type", default="", help="Billing plan type: api, seat, rolling_window, enterprise_rolling_window")
+    p_collect.add_argument("--plan-name", default="", help="Human-readable plan name, e.g. Claude Team")
+    p_collect.add_argument("--rolling-window-usd", type=float, default=None, help="Per-user rolling window/quota in USD-equivalent")
+    p_collect.add_argument("--rolling-window-days", type=int, default=None, help="Rolling window length in days")
+    p_collect.add_argument("--seat-cost-usd", type=float, default=None, help="Fixed monthly seat cost in USD")
     p_collect.set_defaults(func=command_collect)
 
     p_register = sub.add_parser("register", help="Register with a mothership using an invite code")
@@ -544,6 +582,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--employee-id", default=None, help="Set employee ID")
     p_config.add_argument("--claude-dir", default=None, help="Set Claude projects directory")
     p_config.add_argument("--interval-hours", type=float, default=None, help="Set daemon interval")
+    p_config.add_argument("--plan-type", default=None, help="Set billing plan type: api, seat, rolling_window, enterprise_rolling_window")
+    p_config.add_argument("--plan-name", default=None, help="Set human-readable plan name")
+    p_config.add_argument("--rolling-window-usd", type=float, default=None, help="Set per-user rolling window/quota in USD-equivalent")
+    p_config.add_argument("--rolling-window-days", type=int, default=None, help="Set rolling window length in days")
+    p_config.add_argument("--seat-cost-usd", type=float, default=None, help="Set fixed monthly seat cost in USD")
     p_config.set_defaults(func=command_config)
 
     p_status = sub.add_parser("status", help="Show config, logs, and server health")
