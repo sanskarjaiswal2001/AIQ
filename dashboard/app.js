@@ -97,6 +97,7 @@ function switchView(view) {
     employees: 'Employees',
     training: 'Training Needs',
     plans: 'Plan Recommendations',
+    projects: 'Projects',
     rules: 'Anti-Pattern Rules',
     me: 'My Dashboard',
   };
@@ -110,6 +111,7 @@ function renderView(view) {
     case 'employees': renderEmployees(); break;
     case 'training': renderTraining(); break;
     case 'plans': renderPlans(); break;
+    case 'projects': renderProjects(); break;
     case 'rules': renderRules(); break;
     case 'me': renderMe(); break;
   }
@@ -498,6 +500,205 @@ async function renderPlans() {
     showToast('Failed to load plans: ' + e.message);
   } finally {
     showLoading(false);
+  }
+}
+
+// ── Projects View ──────────────────────────────────────
+async function renderProjects() {
+  showLoading(true);
+  try {
+    const projects = await api('/api/projects');
+    const container = document.getElementById('projectsList');
+    if (!projects || !projects.length) {
+      container.innerHTML = emptyState('No projects yet. Project data will appear here once the collector reports activity grouped by project path.');
+      return;
+    }
+    // Sort by total_cost_usd descending
+    projects.sort((a, b) => (b.total_cost_usd || 0) - (a.total_cost_usd || 0));
+    container.innerHTML = projects.map(p => projectCard(p)).join('');
+    // Attach click handlers
+    container.querySelectorAll('.project-card').forEach(card => {
+      card.addEventListener('click', () => openProjectModal(card.dataset.id));
+    });
+  } catch (e) {
+    console.error('Projects error:', e);
+    showToast('Failed to load projects: ' + e.message);
+    document.getElementById('projectsList').innerHTML = emptyState('Failed to load projects. Check that the server is running.');
+  } finally {
+    showLoading(false);
+  }
+}
+
+function projectCard(p) {
+  const employees = p.employees || [];
+  const workTypes = p.work_types || {};
+  const topWorkTypes = Object.entries(workTypes)
+    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+    .slice(0, 3)
+    .map(([type]) => `<span class="work-type-badge">${esc(type)}</span>`)
+    .join('');
+  const team = p.team || (employees.length ? employees[0].team : null);
+  return `
+    <div class="project-card" data-id="${esc(p.project_id)}">
+      <div class="pc-header">
+        <div class="pc-title">${esc(p.project_name)}</div>
+        <div class="pc-cost">${fmtCost(p.total_cost_usd)}</div>
+      </div>
+      <div class="pc-meta">
+        ${team ? `<span class="pc-meta-item">👥 ${esc(team)}</span>` : ''}
+        ${p.client ? `<span class="pc-meta-item">🏢 ${esc(p.client)}</span>` : ''}
+        <span class="pc-meta-item">📁 ${esc(p.project_path || '')}</span>
+      </div>
+      <div class="pc-stats">
+        <div class="pc-stat"><div class="pc-stat-val">${fmtNum(p.total_requests)}</div><div class="pc-stat-label">Requests</div></div>
+        <div class="pc-stat"><div class="pc-stat-val">${fmtNum(p.total_ai_loc)}</div><div class="pc-stat-label">AI LOC</div></div>
+        <div class="pc-stat"><div class="pc-stat-val">${employees.length}</div><div class="pc-stat-label">People</div></div>
+        <div class="pc-stat"><div class="pc-stat-val">${p.active_days || 0}</div><div class="pc-stat-label">Active Days</div></div>
+      </div>
+      <div class="pc-period">📅 ${fmtDate(p.first_activity)} → ${fmtDate(p.last_activity)}</div>
+      ${topWorkTypes ? `<div class="pc-work-types">${topWorkTypes}</div>` : ''}
+    </div>
+  `;
+}
+
+// ── Project Detail Modal ───────────────────────────────
+async function openProjectModal(projectId) {
+  const modal = document.getElementById('employeeModal');
+  modal.classList.add('active');
+  const body = document.getElementById('modalBody');
+  body.innerHTML = '<div style="text-align:center;padding:40px"><div class="spinner"></div></div>';
+
+  try {
+    const p = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+    document.getElementById('modalTitle').textContent = p.project_name || 'Project Details';
+
+    const employees = p.employees || [];
+    const workTypes = p.work_types || {};
+    const modelUsage = p.model_usage || {};
+
+    // Metadata
+    const team = p.team || null;
+    const client = p.client || null;
+    const billingCode = p.billing_code || null;
+    const isUnassigned = !team && !client && !billingCode;
+
+    const metaItem = (label, val) => {
+      const empty = val == null || val === '';
+      return `<div class="project-meta-item ${empty ? 'unassigned' : ''}">
+        <div class="pmi-label">${label}</div>
+        <div class="pmi-value">${empty ? 'Unassigned' : esc(val)}</div>
+      </div>`;
+    };
+
+    const metaHTML = `
+      <div class="project-meta-grid">
+        ${metaItem('Team', team)}
+        ${metaItem('Client', client)}
+        ${metaItem('Billing Code', billingCode)}
+        <div class="project-meta-item">
+          <div class="pmi-label">Project Path</div>
+          <div class="pmi-value" style="font-size:12px;font-family:'SF Mono','Monaco','Cascadia Code',monospace">${esc(p.project_path || '—')}</div>
+        </div>
+      </div>
+      ${isUnassigned ? '<div class="unassigned-note">⚠️ This project has no team, client, or billing code assigned. An admin can assign these via the project metadata to enable proper cost tracking and attribution.</div>' : ''}
+    `;
+
+    // Stat cards
+    const statCards = [
+      ['Total Cost', fmtCost(p.total_cost_usd)],
+      ['Total Requests', fmtNum(p.total_requests)],
+      ['Total AI LOC', fmtNum(p.total_ai_loc)],
+      ['Active Days', p.active_days || 0],
+      ['Sessions', fmtNum(p.total_sessions)],
+      ['Files Edited', p.files_edited_count || 0],
+    ].map(([l, v]) => statCard(l, v, '')).join('');
+
+    // Per-employee table
+    const sortedEmps = [...employees].sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0));
+    const empRows = sortedEmps.length ? sortedEmps.map(e => `
+      <tr>
+        <td>${esc(e.employee_name || e.employee_id)}</td>
+        <td>${esc(e.team || '—')}</td>
+        <td>${fmtNum(e.sessions || 0)}</td>
+        <td>${fmtNum(e.requests || 0)}</td>
+        <td>${fmtNum(e.ai_loc || 0)}</td>
+        <td style="color:var(--yellow)">${fmtCost(e.cost_usd)}</td>
+        <td>${e.active_days || 0}</td>
+      </tr>
+    `).join('') : emptyRow('No employee data');
+
+    // Work type distribution
+    const wtEntries = Object.entries(workTypes).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+    const wtTotal = wtEntries.reduce((s, [, v]) => s + (v || 0), 0) || 1;
+    const workTypeHTML = wtEntries.length ? wtEntries.map(([type, count]) => {
+      const pct = ((count / wtTotal) * 100).toFixed(1);
+      return `<div class="dist-row">
+        <span class="dist-label">${esc(type)}</span>
+        <div class="dist-bar"><div class="dist-fill" style="width:${pct}%;background:var(--accent)"></div></div>
+        <span class="dist-val">${fmtNum(count)}</span>
+      </div>`;
+    }).join('') : emptyRow('No work type data');
+
+    // Model usage
+    const modelEntries = Object.entries(modelUsage).sort((a, b) => {
+      const bc = b[1]?.cost_usd || (typeof b[1] === 'number' ? b[1] : 0);
+      const ac = a[1]?.cost_usd || (typeof a[1] === 'number' ? a[1] : 0);
+      return bc - ac;
+    });
+    const modelHTML = modelEntries.length ? modelEntries.map(([model, info]) => {
+      const req = info?.requests || 0;
+      const inp = info?.input_tokens || 0;
+      const out = info?.output_tokens || 0;
+      const cost = info?.cost_usd || 0;
+      return `<div class="model-row">
+        <span>${esc(model)}</span>
+        <span>${fmtNum(req)}</span>
+        <span>${fmtNum(inp)}</span>
+        <span>${fmtNum(out)}</span>
+        <span>${fmtCost(cost)}</span>
+      </div>`;
+    }).join('') : emptyRow('No model usage data');
+
+    // Git branches
+    const branches = p.git_branches || p.branches || [];
+    const branchHTML = branches.length ? `<div class="proj-branches">${branches.map(b => `<span class="proj-branch-tag">${esc(b)}</span>`).join('')}</div>` : '<div style="color:var(--text-dim);padding:12px">No branch data</div>';
+
+    body.innerHTML = `
+      <div class="modal-section">
+        <h3>Project Metadata</h3>
+        ${metaHTML}
+      </div>
+      <div class="modal-section">
+        <div class="stat-cards">${statCards}</div>
+      </div>
+      <div class="modal-section">
+        <h3>Employee Breakdown (${employees.length})</h3>
+        <table class="proj-emp-table">
+          <thead><tr>
+            <th>Name</th><th>Team</th><th>Sessions</th><th>Requests</th><th>AI LOC</th><th>Cost</th><th>Active Days</th>
+          </tr></thead>
+          <tbody>${empRows}</tbody>
+        </table>
+      </div>
+      <div class="modal-section">
+        <h3>Work Type Distribution</h3>
+        <div style="display:flex;flex-direction:column;gap:6px">${workTypeHTML}</div>
+      </div>
+      <div class="modal-section">
+        <h3>Model Usage</h3>
+        <div class="modal-model-usage">
+          <div class="model-row header"><span>Model</span><span>Requests</span><span>Input</span><span>Output</span><span>Cost</span></div>
+          ${modelHTML}
+        </div>
+      </div>
+      <div class="modal-section">
+        <h3>Git Branches</h3>
+        ${branchHTML}
+      </div>
+    `;
+  } catch (e) {
+    console.error('Project modal error:', e);
+    body.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><h3>Failed to load</h3><p>${esc(e.message)}</p></div>`;
   }
 }
 

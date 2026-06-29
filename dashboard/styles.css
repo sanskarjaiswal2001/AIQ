@@ -348,6 +348,102 @@ html, body {
 .plan-card .pc-reason { font-size: 13px; color: var(--text-dim); }
 .plan-card .pc-meta { display: flex; gap: 20px; margin-top: 8px; font-size: 12px; color: var(--text-muted); }
 
+/* ── Projects List ───────────────────────────────────── */
+.projects-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.project-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.project-card:hover { border-color: var(--accent); background: var(--bg-card-hover); }
+
+.project-card .pc-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; gap: 12px; }
+.project-card .pc-title { font-size: 15px; font-weight: 600; line-height: 1.3; word-break: break-word; }
+.project-card .pc-cost { font-size: 22px; font-weight: 700; color: var(--yellow); white-space: nowrap; }
+.project-card .pc-meta { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+.project-card .pc-meta .pc-meta-item { display: flex; align-items: center; gap: 4px; }
+.project-card .pc-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); margin-bottom: 10px; }
+.project-card .pc-stat { text-align: center; }
+.project-card .pc-stat .pc-stat-val { font-size: 16px; font-weight: 700; }
+.project-card .pc-stat .pc-stat-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.3px; margin-top: 2px; }
+.project-card .pc-period { font-size: 11px; color: var(--text-muted); }
+.project-card .pc-work-types { margin-top: 10px; display: flex; gap: 5px; flex-wrap: wrap; }
+
+/* ── Project Detail Modal ────────────────────────────── */
+.project-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.project-meta-item {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+.project-meta-item .pmi-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 3px; }
+.project-meta-item .pmi-value { font-size: 14px; font-weight: 600; word-break: break-word; }
+.project-meta-item.unassigned .pmi-value { color: var(--orange); }
+
+.unassigned-note {
+  background: rgba(219,109,40,0.1);
+  border: 1px solid rgba(219,109,40,0.3);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--orange);
+  margin-bottom: 20px;
+}
+
+.proj-emp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.proj-emp-table th { text-align: left; font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.proj-emp-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.proj-emp-table tr:last-child td { border-bottom: none; }
+.proj-emp-table tr:hover td { background: var(--bg); }
+
+.work-type-badge {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 12px;
+  font-weight: 500;
+  background: rgba(88,166,255,0.12);
+  color: var(--accent);
+}
+
+.dist-row {
+  display: grid;
+  grid-template-columns: 160px 1fr 70px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 14px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.dist-row .dist-label { font-weight: 500; }
+.dist-row .dist-bar { height: 6px; background: var(--bg-card); border-radius: 3px; overflow: hidden; }
+.dist-row .dist-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+.dist-row .dist-val { font-weight: 600; text-align: right; font-size: 12px; color: var(--text-dim); }
+
+.proj-branches { display: flex; flex-wrap: wrap; gap: 6px; }
+.proj-branch-tag {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+  color: var(--text-dim);
+}
+
 /* ── Rules List ──────────────────────────────────────── */
 .rules-list { display: flex; flex-direction: column; gap: 10px; }
 .rule-card {
