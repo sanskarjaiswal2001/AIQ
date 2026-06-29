@@ -81,6 +81,61 @@ py scripts\aiq-mothership.py run --host 0.0.0.0 --port 8000
 
 Dashboard is now live at `http://localhost:8000`.
 
+### "Set this up locally for me" agent prompt
+
+If you use Claude Code, Codex, Cursor Agent, Copilot coding agent, or another local coding agent, paste this prompt to have it set up AIQ on your machine without deploying anything externally:
+
+```text
+Set up AIQ locally so I can see my own AI coding efficiency dashboard. Do not deploy anything to the cloud and do not require Docker unless native setup fails.
+
+Repository: https://github.com/sanskarjaiswal2001/AIQ
+
+Goal:
+- Clone the repo locally.
+- Install and run the AIQ mothership natively on localhost.
+- Create a local invite.
+- Install the AIQ collector from the local repo.
+- Register me as a local employee.
+- Run one collection against my local Claude Code logs.
+- Show me the local dashboard URL and the /me personal dashboard URL.
+
+Use this flow:
+1. Verify Python is installed. Prefer Python 3.11+ for the mothership.
+2. Clone the repo:
+   git clone https://github.com/sanskarjaiswal2001/AIQ.git
+   cd AIQ
+3. Install the mothership:
+   python scripts/aiq-mothership.py install --generate-admin-key
+   On Windows, use: py scripts\\aiq-mothership.py install --generate-admin-key
+4. Start the mothership on localhost:8000 in a background terminal/process:
+   python scripts/aiq-mothership.py run --host 127.0.0.1 --port 8000
+   On Windows, use: py scripts\\aiq-mothership.py run --host 127.0.0.1 --port 8000
+5. Wait until health works:
+   python scripts/aiq-mothership.py health --server-url http://127.0.0.1:8000
+6. Create an invite:
+   python scripts/aiq-mothership.py create-invite --server-url http://127.0.0.1:8000 --team Local
+   Save the invite code from the JSON response.
+7. Install the collector from the local repo:
+   cd collector
+   python -m pip install -e .
+8. Register me with the invite code:
+   aiq register --server-url http://127.0.0.1:8000 --invite-code <INVITE_CODE> --employee-id local-user --name "Local User" --team Local
+9. Run one collection:
+   aiq collect
+   If Claude Code logs are elsewhere, use: aiq collect --claude-dir <path-to-claude-projects>
+10. Open these URLs:
+   - Management dashboard: http://127.0.0.1:8000
+   - Personal dashboard: http://127.0.0.1:8000/me
+
+Important:
+- Do not send my logs or metrics to any external service.
+- AIQ should only run locally on 127.0.0.1 for this setup.
+- If port 8000 is busy, use another port and update every command consistently.
+- If Python refuses global installs, create/use a virtual environment or use the repo's native installer; do not use sudo pip.
+- If Docker is not available, continue with native Python; Docker is optional.
+- At the end, report exactly what commands ran, where the repo is cloned, where the AIQ config is stored, and what dashboard URLs I should open.
+```
+
 ### Optional Docker deploy
 
 ```bash
@@ -99,8 +154,8 @@ aiq register --server-url http://localhost:8000 --invite-code YOUR_CODE --name "
 # Collect and push (one-time)
 aiq collect
 
-# Or run on a schedule via cron
-aiq install-cron --interval-hours 6
+# Or run on a native OS schedule
+aiq install-autostart --interval-hours 6
 
 # Or run foreground daemon mode
 aiq collect --daemon
