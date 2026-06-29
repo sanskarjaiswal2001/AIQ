@@ -31,7 +31,7 @@ Built on the data model from [Microsoft's AI-Engineering-Coach](https://github.c
 ```
 ┌──────────────────────────────────────────────────────┐
 │  ORG ADMIN                                           │
-│  docker compose up → mothership live on port 8000    │
+│  Native Python or Docker → mothership on port 8000   │
 │  Create org → invite employees                       │
 └──────────────────────────────────────────────────────┘
                         │
@@ -51,28 +51,42 @@ Built on the data model from [Microsoft's AI-Engineering-Coach](https://github.c
 ```
 
 **Two parts:**
-- **Mothership** — self-hosted server (FastAPI + SQLite) + management dashboard. Deployed once with Docker.
-- **Edge collector** — lightweight CLI (`pip install aiq-collector`) that parses local AI logs and pushes metrics to the mothership.
+- **Mothership** — self-hosted server (FastAPI + SQLite) + management dashboard. Runs natively on Linux, WSL, macOS, and Windows; Docker Compose is optional.
+- **Edge collector** — lightweight CLI (`pip install aiq-collector`) that parses local AI logs and pushes metrics to the mothership. Auto-runs with systemd/cron on Linux/WSL, launchd on macOS, and Task Scheduler on Windows.
+
+See the full [cross-platform install guide](docs/cross-platform.md).
 
 ## Quick Start
 
-### Deploy the mothership (org admin)
+### Deploy the mothership natively (Linux / WSL / macOS / Windows)
 
 ```bash
 git clone https://github.com/sanskarjaiswal2001/AIQ.git
 cd AIQ
-cp .env.example .env
-# Edit .env to set AIQ_ADMIN_KEY (generate one: python -c "import secrets; print(secrets.token_urlsafe(32))")
-docker compose up -d
+python scripts/aiq-mothership.py install --generate-admin-key
+python scripts/aiq-mothership.py run --host 0.0.0.0 --port 8000
 
-# Create an employee invite
-curl -X POST http://localhost:8000/api/admin/invites \
-  -H "Content-Type: application/json" \
-  -H "X-Admin-Key: $AIQ_ADMIN_KEY" \
-  -d '{"team":"Engineering","uses_remaining":1}'
+# In another terminal, create an employee invite
+python scripts/aiq-mothership.py create-invite --server-url http://localhost:8000 --team Engineering
+```
+
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/sanskarjaiswal2001/AIQ.git
+cd AIQ
+py scripts\aiq-mothership.py install --generate-admin-key
+py scripts\aiq-mothership.py run --host 0.0.0.0 --port 8000
 ```
 
 Dashboard is now live at `http://localhost:8000`.
+
+### Optional Docker deploy
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
 
 ### Install the collector (each employee)
 
@@ -194,10 +208,14 @@ Triggered anti-patterns map to specific training modules:
 
 ```
 AIQ/
-├── Dockerfile              # Single image for server + dashboard
-├── docker-compose.yml      # One-command deploy
+├── Dockerfile              # Optional single image for server + dashboard
+├── docker-compose.yml      # Optional Docker deploy
 ├── .env.example            # Configuration template
 ├── README.md
+├── docs/
+│   └── cross-platform.md   # Native install guide for Linux/WSL/macOS/Windows
+├── scripts/
+│   └── aiq-mothership.py   # Cross-platform native mothership launcher
 ├── server/                 # Mothership (FastAPI + SQLite)
 │   ├── main.py             # API endpoints + static serving
 │   ├── database.py         # SQLite schema + queries
@@ -246,7 +264,7 @@ aiq collect --server-url http://localhost:8000 --employee-id test-dev
 - **Backend**: FastAPI + SQLite (stdlib, zero-config DB)
 - **Frontend**: Vanilla HTML/CSS/JS (no build step, no framework)
 - **Collector**: Python stdlib only (no external dependencies)
-- **Deploy**: Docker + Docker Compose
+- **Deploy**: Native Python launcher for Linux/WSL/macOS/Windows; Docker Compose optional
 
 ## Roadmap
 
@@ -255,12 +273,13 @@ aiq collect --server-url http://localhost:8000 --employee-id test-dev
 - [x] 5 practice scores with weekly trends
 - [x] Training + plan recommendation engine
 - [x] Management dashboard
-- [x] Docker deployment
+- [x] Native mothership launcher for Linux, WSL, macOS, and Windows
+- [x] Docker deployment (optional)
 - [x] pip-installable collector
 - [x] API key authentication
 - [x] Employee self-registration with invite codes
 - [x] Personal dashboard (`/me`) for employees
-- [x] Collector auto-run (cron + foreground daemon)
+- [x] Collector auto-run (systemd/cron, launchd, Windows Task Scheduler, foreground daemon)
 - [ ] GitHub Copilot support
 - [ ] OpenAI Codex CLI support
 - [ ] Data retention policies

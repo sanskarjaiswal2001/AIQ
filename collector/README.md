@@ -29,7 +29,29 @@ aiq collect
 
 3. **Run automatically every 6 hours:**
 ```bash
-aiq install-cron --interval-hours 6
+aiq install-autostart --interval-hours 6
+```
+
+This chooses the native scheduler for your OS:
+
+| OS | Scheduler |
+|---|---|
+| Linux / WSL | systemd user timer, fallback to cron |
+| macOS | launchd LaunchAgent |
+| Windows | Task Scheduler |
+
+Force a backend if needed:
+
+```bash
+aiq install-autostart --backend cron --interval-hours 6
+aiq install-autostart --backend launchd --interval-hours 6
+aiq install-autostart --backend task-scheduler --interval-hours 6
+```
+
+Remove auto-run:
+
+```bash
+aiq install-autostart --remove
 ```
 
 Or run foreground daemon mode:
@@ -46,7 +68,8 @@ aiq collect --daemon --interval 6
 | `aiq collect` | Parse logs and push metrics to the server |
 | `aiq config` | View or update `~/.aiq/config.toml` |
 | `aiq status` | Show config, sessions found, last run, and server health |
-| `aiq install-cron` | Install/remove a user crontab entry for scheduled collection |
+| `aiq install-autostart` | Install/remove OS-native scheduled collection: systemd/cron, launchd, or Windows Task Scheduler |
+| `aiq install-cron` | Compatibility alias for Linux/WSL cron users |
 
 ## Config
 

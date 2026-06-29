@@ -15,6 +15,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -297,31 +300,217 @@ def command_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_install_cron(args: argparse.Namespace) -> int:
-    """Install a user crontab entry that runs `aiq collect` periodically."""
-    interval = max(1, int(args.interval_hours or read_config().get("collector", {}).get("interval_hours", DEFAULT_INTERVAL_HOURS) or DEFAULT_INTERVAL_HOURS))
-    aiq_path = Path(sys.argv[0]).resolve()
+def _is_wsl() -> bool:
+    if platform.system().lower() != "linux":
+        return False
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return False
+
+
+def _collector_command() -> list[str]:
+    """Return a robust command for scheduled collection."""
+    return [sys.executable, "-m", "aiq_collector.cli", "collect", "--quiet"]
+
+
+def _shell_join(parts: list[str]) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline(parts)
+    return " ".join(shlex.quote(p) for p in parts)
+
+
+def _install_systemd_timer(interval: int, remove: bool) -> int | None:
+    """Install a Linux user systemd timer. Return None if systemd isn't usable."""
+    systemctl = shutil.which("systemctl")
+    if not systemctl or os.name == "nt":
+        return None
+    probe = subprocess.run([systemctl, "--user", "is-system-running"], capture_output=True, text=True, check=False)
+    if "Failed to connect" in (probe.stderr + probe.stdout) or "No medium found" in (probe.stderr + probe.stdout):
+        return None
+
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    service = unit_dir / "aiq-collector.service"
+    timer = unit_dir / "aiq-collector.timer"
     log_path = CONFIG_DIR / "collector.log"
-    cron_line = f"0 */{interval} * * * {aiq_path} collect --quiet >> {log_path} 2>&1 # AIQ_COLLECTOR"
+    cmd = _collector_command()
+
+    if remove:
+        subprocess.run([systemctl, "--user", "disable", "--now", "aiq-collector.timer"], check=False)
+        for path in [service, timer]:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        subprocess.run([systemctl, "--user", "daemon-reload"], check=False)
+        print("Removed AIQ collector systemd user timer.")
+        return 0
+
+    service.write_text(f"""[Unit]
+Description=AIQ edge collector
+
+[Service]
+Type=oneshot
+ExecStart={_shell_join(cmd)}
+StandardOutput=append:{log_path}
+StandardError=append:{log_path}
+""", encoding="utf-8")
+    timer.write_text(f"""[Unit]
+Description=Run AIQ edge collector every {interval} hour(s)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec={interval}h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""", encoding="utf-8")
+    subprocess.check_call([systemctl, "--user", "daemon-reload"])
+    subprocess.check_call([systemctl, "--user", "enable", "--now", "aiq-collector.timer"])
+    print(f"Installed AIQ collector systemd user timer: every {interval} hour(s)")
+    print(f"Logs: {log_path}")
+    if _is_wsl():
+        print("Note: WSL requires systemd enabled for timers to run after shell exit. If disabled, use --backend cron or daemon mode.")
+    return 0
+
+
+def _install_cron_entry(interval: int, remove: bool) -> int:
+    log_path = CONFIG_DIR / "collector.log"
+    cron_line = f"0 */{interval} * * * {_shell_join(_collector_command())} >> {shlex.quote(str(log_path))} 2>&1 # AIQ_COLLECTOR"
     try:
         existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False).stdout
     except FileNotFoundError:
         print("crontab is not available on this system. Use `aiq collect --daemon` instead.", file=sys.stderr)
         return 1
     lines = [line for line in existing.splitlines() if "# AIQ_COLLECTOR" not in line]
-    if not args.remove:
+    if not remove:
         lines.append(cron_line)
     new_cron = "\n".join(lines).strip() + "\n"
     proc = subprocess.run(["crontab", "-"], input=new_cron, text=True, capture_output=True, check=False)
     if proc.returncode != 0:
         print(proc.stderr or "failed to update crontab", file=sys.stderr)
         return proc.returncode
-    if args.remove:
+    if remove:
         print("Removed AIQ collector cron entry.")
     else:
         print(f"Installed AIQ collector cron entry: every {interval} hour(s)")
         print(f"Logs: {log_path}")
     return 0
+
+
+def _install_launchd(interval: int, remove: bool) -> int:
+    label = "dev.aiq.collector"
+    plist_dir = Path.home() / "Library" / "LaunchAgents"
+    plist_dir.mkdir(parents=True, exist_ok=True)
+    plist = plist_dir / f"{label}.plist"
+    log_path = CONFIG_DIR / "collector.log"
+    err_path = CONFIG_DIR / "collector.err.log"
+    if remove:
+        subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+        try:
+            plist.unlink()
+        except FileNotFoundError:
+            pass
+        print("Removed AIQ collector launchd job.")
+        return 0
+    args_xml = "\n".join(f"        <string>{arg}</string>" for arg in _collector_command())
+    plist.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+{args_xml}
+    </array>
+    <key>StartInterval</key>
+    <integer>{interval * 3600}</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{err_path}</string>
+</dict>
+</plist>
+""", encoding="utf-8")
+    subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+    proc = subprocess.run(["launchctl", "load", str(plist)], capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        print(proc.stderr or "failed to load launchd plist", file=sys.stderr)
+        return proc.returncode
+    print(f"Installed AIQ collector launchd job: every {interval} hour(s)")
+    print(f"Plist: {plist}")
+    print(f"Logs: {log_path}")
+    return 0
+
+
+def _install_windows_task(interval: int, remove: bool) -> int:
+    task_name = "AIQ Collector"
+    if remove:
+        proc = subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"], capture_output=True, text=True, check=False)
+        if proc.returncode not in (0, 1):
+            print(proc.stderr or proc.stdout, file=sys.stderr)
+            return proc.returncode
+        print("Removed AIQ collector Windows scheduled task.")
+        return 0
+    cmd = _shell_join(_collector_command())
+    proc = subprocess.run([
+        "schtasks", "/Create", "/F", "/SC", "HOURLY", "/MO", str(interval),
+        "/TN", task_name, "/TR", cmd,
+    ], capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        print(proc.stderr or proc.stdout or "failed to create scheduled task", file=sys.stderr)
+        return proc.returncode
+    print(f"Installed Windows scheduled task '{task_name}': every {interval} hour(s)")
+    return 0
+
+
+def command_install_autostart(args: argparse.Namespace) -> int:
+    """Install/remove OS-native scheduled collection."""
+    interval = max(1, int(args.interval_hours or read_config().get("collector", {}).get("interval_hours", DEFAULT_INTERVAL_HOURS) or DEFAULT_INTERVAL_HOURS))
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    system = platform.system().lower()
+    backend = (args.backend or "auto").lower()
+
+    if backend == "auto":
+        if system == "windows":
+            backend = "task-scheduler"
+        elif system == "darwin":
+            backend = "launchd"
+        else:
+            backend = "systemd"
+
+    if backend in {"task-scheduler", "windows"}:
+        if system != "windows":
+            print("Windows Task Scheduler backend is only available on Windows.", file=sys.stderr)
+            return 1
+        return _install_windows_task(interval, args.remove)
+    if backend == "launchd":
+        if system != "darwin":
+            print("launchd backend is only available on macOS.", file=sys.stderr)
+            return 1
+        return _install_launchd(interval, args.remove)
+    if backend == "cron":
+        return _install_cron_entry(interval, args.remove)
+    if backend == "systemd":
+        rc = _install_systemd_timer(interval, args.remove)
+        if rc is not None:
+            return rc
+        print("systemd user timer unavailable; falling back to cron.")
+        return _install_cron_entry(interval, args.remove)
+
+    print(f"Unknown backend: {backend}", file=sys.stderr)
+    return 1
+
+
+def command_install_cron(args: argparse.Namespace) -> int:
+    """Backward-compatible alias for install-autostart --backend cron."""
+    args.backend = "cron"
+    return command_install_autostart(args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -361,7 +550,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.add_argument("--server-url", default="", help="Override server URL for health check")
     p_status.set_defaults(func=command_status)
 
-    p_cron = sub.add_parser("install-cron", help="Install or remove a user crontab entry for automatic collection")
+    p_autostart = sub.add_parser("install-autostart", help="Install/remove OS-native scheduled collection")
+    p_autostart.add_argument("--interval-hours", type=float, default=None, help="Collection interval in hours (default from config or 6)")
+    p_autostart.add_argument("--backend", choices=["auto", "systemd", "cron", "launchd", "task-scheduler"], default="auto", help="Scheduler backend (default: auto)")
+    p_autostart.add_argument("--remove", action="store_true", help="Remove the AIQ scheduled job")
+    p_autostart.set_defaults(func=command_install_autostart)
+
+    p_cron = sub.add_parser("install-cron", help="Compatibility alias: install/remove a cron entry")
     p_cron.add_argument("--interval-hours", type=float, default=None, help="Collection interval in hours (default from config or 6)")
     p_cron.add_argument("--remove", action="store_true", help="Remove the AIQ cron entry")
     p_cron.set_defaults(func=command_install_cron)
