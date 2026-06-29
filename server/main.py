@@ -309,14 +309,10 @@ def update_project(project_id: str, body: dict[str, Any] = Body(...)):
 def plans_catalog() -> dict[str, Any]:
     """Return the full plan catalog for frontend dropdowns."""
     try:
-        from plan_catalog import PLAN_CATALOG, get_all_providers
-        try:
-            from plan_catalog import BILLING_MODES
-        except ImportError:
-            BILLING_MODES = {}
+        from plan_catalog import PLAN_CATALOG, get_all_providers, BILLING_MODE_DESCRIPTIONS
         return {
             "providers": get_all_providers(),
-            "billing_modes": BILLING_MODES,
+            "billing_modes": BILLING_MODE_DESCRIPTIONS,
             "plans": PLAN_CATALOG,
         }
     except ImportError:
