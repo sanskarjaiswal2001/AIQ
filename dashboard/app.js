@@ -99,6 +99,7 @@ function switchView(view) {
     training: 'Training Needs',
     plans: 'Plan Recommendations',
     projects: 'Projects',
+    staffing: 'Staffing Intelligence',
     rules: 'Anti-Pattern Rules',
     me: 'My Dashboard',
   };
@@ -114,6 +115,7 @@ function renderView(view) {
     case 'training': renderTraining(); break;
     case 'plans': renderPlans(); break;
     case 'projects': renderProjects(); break;
+    case 'staffing': renderStaffing(); break;
     case 'rules': renderRules(); break;
     case 'me': renderMe(); break;
   }
@@ -604,6 +606,70 @@ async function renderPlans() {
   } finally {
     showLoading(false);
   }
+}
+
+// ── Staffing View ──────────────────────────────────────
+async function renderStaffing() {
+  showLoading(true);
+  try {
+    const data = await api('/api/org/staffing');
+    const s = data.summary || {};
+    const el = document.getElementById('staffingDashboard');
+    el.innerHTML = `
+      <div class="stat-cards">
+        ${statCard('Can Take More', s.high_capacity || 0, 'high score + healthy usage')}
+        ${statCard('Train First', s.train_before_more_load || 0, 'before harder work')}
+        ${statCard('Relocatable', s.underutilized || 0, 'low usage / available')}
+        ${statCard('Capacity Watch', s.overloaded || 0, 'many projects or high load')}
+        ${statCard('Projects Flagged', s.projects_flagged || 0, 'staffing pressure')}
+      </div>
+      <div class="card-grid two-col">
+        <div class="card card-wide"><h3>Can Handle More Complex Projects</h3>${staffTable(data.high_capacity, 'No high-capacity candidates yet')}</div>
+        <div class="card card-wide"><h3>Needs Training Before More Load</h3>${staffTable(data.train_before_more_load, 'No train-first candidates')}</div>
+        <div class="card card-wide"><h3>Potential Relocation / More Allocation</h3>${staffTable(data.underutilized, 'No underutilized employees')}</div>
+        <div class="card card-wide"><h3>Capacity Watch</h3>${staffTable(data.overloaded, 'No overloaded employees')}</div>
+        <div class="card card-wide" style="grid-column:1/-1"><h3>Project Staffing Pressure</h3>${projectStaffingTable(data.project_staffing)}</div>
+      </div>
+    `;
+  } catch (e) {
+    console.error('Staffing error:', e);
+    showToast('Failed to load staffing intelligence: ' + e.message);
+    document.getElementById('staffingDashboard').innerHTML = emptyState('Failed to load staffing intelligence.');
+  } finally {
+    showLoading(false);
+  }
+}
+
+function staffTable(rows, emptyMsg) {
+  rows = rows || [];
+  if (!rows.length) return emptyState(emptyMsg);
+  return `<div class="staff-table">
+    <div class="staff-row header"><span>Name</span><span>Team</span><span>Score</span><span>Req</span><span>Proj</span><span>Why</span></div>
+    ${rows.map(r => `<div class="staff-row">
+      <span>${esc(r.name || r.employee_id)}</span>
+      <span>${esc(r.team || '—')}</span>
+      <span style="color:${scoreColor(r.overall_score || 0)}">${(r.overall_score || 0).toFixed(0)}</span>
+      <span>${fmtNum(r.requests || 0)}</span>
+      <span>${r.projects || 0}</span>
+      <span class="staff-rec">${esc(r.recommendation || '')}</span>
+    </div>`).join('')}
+  </div>`;
+}
+
+function projectStaffingTable(rows) {
+  rows = rows || [];
+  if (!rows.length) return emptyState('No project staffing data yet');
+  return `<div class="staff-table project-staffing">
+    <div class="staff-row header"><span>Project</span><span>Team</span><span>People</span><span>Spend</span><span>Pressure</span><span>Recommendation</span></div>
+    ${rows.map(r => `<div class="staff-row">
+      <span>${esc(r.project_name)}</span>
+      <span>${esc(r.team || '—')}</span>
+      <span>${r.people || 0}</span>
+      <span class="money">${fmtCost(r.cost_usd)}</span>
+      <span><span class="pressure-badge ${esc(r.pressure)}">${esc(r.pressure)}</span></span>
+      <span class="staff-rec">${esc(r.recommendation || '')}</span>
+    </div>`).join('')}
+  </div>`;
 }
 
 // ── Projects View ──────────────────────────────────────

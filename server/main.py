@@ -451,6 +451,99 @@ def export_projects_csv(masked: bool = Query(False, description="Mask project/cl
     )
 
 
+@app.get("/api/org/staffing")
+def staffing_intelligence() -> dict[str, Any]:
+    """Staffing/capacity recommendations derived from latest employee + project data."""
+    employees = db.list_employees()
+    projects = db.get_all_projects()
+    project_count_by_employee: dict[str, int] = {}
+    for p in projects:
+        for pe in p.get("employees") or []:
+            eid = pe.get("employee_id")
+            if not eid:
+                continue
+            project_count_by_employee[eid] = project_count_by_employee.get(eid, 0) + 1
+
+    high_capacity: list[dict[str, Any]] = []
+    train_before_more_load: list[dict[str, Any]] = []
+    underutilized: list[dict[str, Any]] = []
+    overloaded: list[dict[str, Any]] = []
+
+    for e in employees:
+        m = e.get("metrics") or {}
+        score = float(m.get("overall_score") or 0)
+        requests = int(m.get("total_requests") or 0)
+        cost = float(m.get("estimated_cost_usd") or 0)
+        eid = str(e.get("employee_id") or "")
+        projects_n = project_count_by_employee.get(eid, int(m.get("total_workspaces") or 0))
+        high_flags = int(e.get("high_severity_count") or 0)
+        anti_count = int(e.get("anti_patterns_count") or 0)
+        row = {
+            "employee_id": e.get("employee_id"),
+            "name": e.get("name") or e.get("employee_id"),
+            "team": e.get("team") or "Unassigned",
+            "overall_score": round(score, 1),
+            "requests": requests,
+            "projects": projects_n,
+            "cost_usd": round(cost, 2),
+            "anti_patterns": anti_count,
+            "high_severity": high_flags,
+        }
+        if score >= 80 and requests >= 25 and anti_count <= 1:
+            high_capacity.append({**row, "recommendation": "Can handle more complex projects or mentor others"})
+        if score < 60 or high_flags > 0 or anti_count >= 3:
+            train_before_more_load.append({**row, "recommendation": "Training before adding complexity or increasing plan tier"})
+        if requests < 20 and cost < 10 and score >= 60:
+            underutilized.append({**row, "recommendation": "Potential relocation / more allocation available"})
+        if projects_n >= 3 or (requests >= 80 and score >= 70):
+            overloaded.append({**row, "recommendation": "Watch capacity; consider backup staffing or plan upgrade"})
+
+    project_staffing = []
+    for p in projects:
+        people = len(p.get("employees") or [])
+        requests = int(p.get("total_requests") or 0)
+        cost = float(p.get("total_cost_usd") or 0)
+        active_days = int(p.get("active_days") or 0)
+        pressure = "normal"
+        rec = "Current staffing looks acceptable"
+        if requests >= 50 and people <= 1:
+            pressure = "understaffed"
+            rec = "High AI activity with one contributor; add backup or second owner"
+        elif people >= 3 and requests < 30:
+            pressure = "overstaffed"
+            rec = "Several contributors but low activity; consider consolidation"
+        elif cost >= 50 and people <= 2:
+            pressure = "financial_watch"
+            rec = "Spend concentration is high; review scope and plan fit"
+        project_staffing.append({
+            "project_id": p.get("project_id"),
+            "project_name": p.get("project_name"),
+            "team": p.get("team") or (p.get("employees") or [{}])[0].get("team") or "Unassigned",
+            "people": people,
+            "requests": requests,
+            "cost_usd": round(cost, 2),
+            "active_days": active_days,
+            "pressure": pressure,
+            "recommendation": rec,
+        })
+    project_staffing.sort(key=lambda x: (x["pressure"] == "normal", -x["cost_usd"]))
+
+    return {
+        "summary": {
+            "high_capacity": len(high_capacity),
+            "train_before_more_load": len(train_before_more_load),
+            "underutilized": len(underutilized),
+            "overloaded": len(overloaded),
+            "projects_flagged": sum(1 for p in project_staffing if p["pressure"] != "normal"),
+        },
+        "high_capacity": sorted(high_capacity, key=lambda x: x["overall_score"], reverse=True),
+        "train_before_more_load": sorted(train_before_more_load, key=lambda x: (x["high_severity"], x["anti_patterns"], -x["overall_score"]), reverse=True),
+        "underutilized": sorted(underutilized, key=lambda x: x["requests"]),
+        "overloaded": sorted(overloaded, key=lambda x: (x["projects"], x["requests"]), reverse=True),
+        "project_staffing": project_staffing,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Projects
 # ---------------------------------------------------------------------------
