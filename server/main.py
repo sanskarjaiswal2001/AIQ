@@ -21,7 +21,7 @@ from typing import Any
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import database as db
@@ -262,8 +262,193 @@ def team_overview() -> dict[str, Any]:
 
 @app.get("/api/rules")
 def rules() -> list[dict[str, Any]]:
-    """Static metadata for all anti-pattern rules."""
+    """Static metadata for all anti-pattern rule metadata."""
     return all_rules()
+
+
+# ---------------------------------------------------------------------------
+# Org / Executive / Investor views
+# ---------------------------------------------------------------------------
+
+
+def _org_rollup() -> dict[str, Any]:
+    employees = db.list_employees()
+    projects = db.get_all_projects()
+    total_cost = sum(float(p.get("total_cost_usd") or 0) for p in projects)
+    total_requests = sum(int(p.get("total_requests") or 0) for p in projects)
+    total_ai_loc = sum(int(p.get("total_ai_loc") or 0) for p in projects)
+    total_user_loc = sum(int(p.get("total_user_loc") or 0) for p in projects)
+    active_people = len(employees)
+    active_projects = len(projects)
+
+    # Team and client rollups from projects; employee score rollups from employees.
+    by_team: dict[str, dict[str, Any]] = {}
+    for p in projects:
+        team = p.get("team") or (p.get("employees") or [{}])[0].get("team") or "Unassigned"
+        bucket = by_team.setdefault(team, {"projects": 0, "employees": set(), "cost_usd": 0.0, "requests": 0, "ai_loc": 0})
+        bucket["projects"] += 1
+        bucket["cost_usd"] += float(p.get("total_cost_usd") or 0)
+        bucket["requests"] += int(p.get("total_requests") or 0)
+        bucket["ai_loc"] += int(p.get("total_ai_loc") or 0)
+        for e in p.get("employees") or []:
+            if e.get("employee_id"):
+                bucket["employees"].add(e["employee_id"])
+
+    team_rows = []
+    for team, info in by_team.items():
+        team_rows.append({
+            "team": team,
+            "projects": info["projects"],
+            "employees": len(info["employees"]),
+            "cost_usd": round(info["cost_usd"], 2),
+            "requests": info["requests"],
+            "ai_loc": info["ai_loc"],
+            "cost_per_request": round(info["cost_usd"] / info["requests"], 4) if info["requests"] else 0,
+        })
+    team_rows.sort(key=lambda x: x["cost_usd"], reverse=True)
+
+    high_value = []
+    attention = []
+    for p in projects:
+        requests = int(p.get("total_requests") or 0)
+        cost = float(p.get("total_cost_usd") or 0)
+        ai_loc = int(p.get("total_ai_loc") or 0)
+        people = len(p.get("employees") or [])
+        item = {
+            "project_id": p.get("project_id"),
+            "project_name": p.get("project_name"),
+            "team": p.get("team") or (p.get("employees") or [{}])[0].get("team") or "Unassigned",
+            "cost_usd": round(cost, 2),
+            "requests": requests,
+            "ai_loc": ai_loc,
+            "employees": people,
+            "active_days": p.get("active_days") or 0,
+            "cost_per_request": round(cost / requests, 4) if requests else 0,
+            "ai_loc_per_dollar": round(ai_loc / cost, 2) if cost else 0,
+        }
+        if ai_loc and cost:
+            high_value.append(item)
+        if cost >= 20 or people >= 3 or (requests and cost / requests > 1):
+            attention.append(item)
+    high_value.sort(key=lambda x: x["ai_loc_per_dollar"], reverse=True)
+    attention.sort(key=lambda x: x["cost_usd"], reverse=True)
+
+    return {
+        "totals": {
+            "employees": active_people,
+            "projects": active_projects,
+            "requests": total_requests,
+            "ai_loc": total_ai_loc,
+            "user_loc": total_user_loc,
+            "cost_usd": round(total_cost, 2),
+            "avg_cost_per_project": round(total_cost / active_projects, 2) if active_projects else 0,
+            "cost_per_request": round(total_cost / total_requests, 4) if total_requests else 0,
+            "ai_loc_per_dollar": round(total_ai_loc / total_cost, 2) if total_cost else 0,
+        },
+        "team_rollup": team_rows,
+        "top_projects_by_spend": projects[:10],
+        "high_value_projects": high_value[:10],
+        "needs_attention": attention[:10],
+    }
+
+
+def _masked_project(p: dict[str, Any], idx: int, reveal_financials: bool) -> dict[str, Any]:
+    cost = round(float(p.get("total_cost_usd") or p.get("cost_usd") or 0), 2)
+    requests = int(p.get("total_requests") or p.get("requests") or 0)
+    ai_loc = int(p.get("total_ai_loc") or p.get("ai_loc") or 0)
+    employees = p.get("employees")
+    people = len(employees) if isinstance(employees, list) else int(employees or 0)
+    return {
+        "project_label": f"Project {idx:02d}",
+        "team_label": p.get("team_label") or p.get("team") or (employees or [{}])[0].get("team") if isinstance(employees, list) and employees else p.get("team") or "Unassigned",
+        "people": people,
+        "active_days": p.get("active_days") or 0,
+        "requests": requests,
+        "ai_loc": ai_loc,
+        "cost_usd": cost if reveal_financials else None,
+        "cost_band": _cost_band(cost),
+        "work_mix": p.get("work_types") or {},
+        "model_mix": p.get("model_usage") or {},
+        "ai_loc_per_dollar": round(ai_loc / cost, 2) if reveal_financials and cost else None,
+    }
+
+
+def _cost_band(cost: float) -> str:
+    if cost >= 100:
+        return "$100+"
+    if cost >= 50:
+        return "$50-$99"
+    if cost >= 20:
+        return "$20-$49"
+    if cost > 0:
+        return "$1-$19"
+    return "$0"
+
+
+@app.get("/api/org/overview")
+def org_overview() -> dict[str, Any]:
+    """Executive org overview: where AI spend is going and whether it is productive."""
+    return _org_rollup()
+
+
+@app.get("/api/org/investor-view")
+def investor_view(reveal_financials: bool = Query(True, description="Include exact spend; when false only cost bands are returned")) -> dict[str, Any]:
+    """Masked view suitable for investors/clients: preserves rollups, hides people/work/client details."""
+    rollup = _org_rollup()
+    projects = db.get_all_projects()
+    return {
+        "summary": rollup["totals"],
+        "masking": {
+            "employees": "Names hidden; only counts are shown",
+            "projects": "Project names/paths hidden; stable labels are used",
+            "clients": "Client names and billing codes hidden",
+            "work": "Only high-level work/mode distributions are shown",
+            "financials": "Exact spend shown" if reveal_financials else "Exact spend hidden; cost bands shown",
+        },
+        "projects": [_masked_project(p, i + 1, reveal_financials) for i, p in enumerate(projects)],
+        "team_rollup": rollup["team_rollup"],
+        "high_value_projects": [_masked_project(p, i + 1, reveal_financials) for i, p in enumerate(rollup["high_value_projects"])],
+    }
+
+
+@app.get("/api/org/export/projects.csv")
+def export_projects_csv(masked: bool = Query(False, description="Mask project/client/path fields")) -> Response:
+    """CSV export for finance/client reporting."""
+    import csv
+    import io
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow([
+        "project_id", "project_name", "team", "client", "billing_code", "employees", "sessions",
+        "requests", "ai_loc", "user_loc", "input_tokens", "output_tokens", "cost_usd",
+        "active_days", "first_activity", "last_activity", "files_edited_count",
+    ])
+    for idx, p in enumerate(db.get_all_projects(), start=1):
+        writer.writerow([
+            f"project-{idx:02d}" if masked else p.get("project_id"),
+            f"Project {idx:02d}" if masked else p.get("project_name"),
+            p.get("team") or (p.get("employees") or [{}])[0].get("team") or "Unassigned",
+            "MASKED" if masked and p.get("client") else (p.get("client") or ""),
+            "MASKED" if masked and p.get("billing_code") else (p.get("billing_code") or ""),
+            len(p.get("employees") or []),
+            p.get("total_sessions") or 0,
+            p.get("total_requests") or 0,
+            p.get("total_ai_loc") or 0,
+            p.get("total_user_loc") or 0,
+            p.get("total_input_tokens") or 0,
+            p.get("total_output_tokens") or 0,
+            round(float(p.get("total_cost_usd") or 0), 2),
+            p.get("active_days") or 0,
+            p.get("first_activity") or "",
+            p.get("last_activity") or "",
+            p.get("files_edited_count") or 0,
+        ])
+    return Response(
+        out.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=aiq-projects.csv"},
+    )
 
 
 # ---------------------------------------------------------------------------

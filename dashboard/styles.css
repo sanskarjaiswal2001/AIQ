@@ -584,6 +584,39 @@ html, body {
 .plan-recommendation-box .prb-action { font-size: 18px; font-weight: 700; }
 .plan-recommendation-box .prb-reason { font-size: 13px; color: var(--text-dim); flex: 1; }
 
+/* ── Executive View ───────────────────────────────────── */
+.exec-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.exec-actions .btn { text-decoration: none; }
+.card-grid.two-col { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+.exec-table { display: flex; flex-direction: column; gap: 6px; }
+.exec-row {
+  display: grid;
+  grid-template-columns: 36px 1fr 120px 90px 90px 70px;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 12px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.exec-row.compact { grid-template-columns: 42px 1fr 90px 90px 90px; }
+.exec-row.header {
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.exec-row .rank { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.money { color: var(--yellow); font-weight: 700; }
+.muted-copy { color: var(--text-dim); font-size: 12px; margin-bottom: 12px; }
+
 /* ── Empty State ─────────────────────────────────────── */
 .empty-state {
   text-align: center;

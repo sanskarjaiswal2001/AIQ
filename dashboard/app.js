@@ -94,6 +94,7 @@ function switchView(view) {
   });
   const titles = {
     overview: 'Team Overview',
+    executive: 'Executive Overview',
     employees: 'Employees',
     training: 'Training Needs',
     plans: 'Plan Recommendations',
@@ -108,6 +109,7 @@ function switchView(view) {
 function renderView(view) {
   switch (view) {
     case 'overview': renderOverview(); break;
+    case 'executive': renderExecutive(); break;
     case 'employees': renderEmployees(); break;
     case 'training': renderTraining(); break;
     case 'plans': renderPlans(); break;
@@ -208,6 +210,107 @@ function planClass(rec) {
   if (rec === 'maintain' || rec === 'current') return 'maintain';
   if (rec === 'train_first') return 'train';
   return 'review';
+}
+
+// ── Executive View ─────────────────────────────────────
+async function renderExecutive() {
+  showLoading(true);
+  try {
+    const [org, investor] = await Promise.all([
+      api('/api/org/overview'),
+      api('/api/org/investor-view?reveal_financials=true'),
+    ]);
+    const t = org.totals || {};
+    const el = document.getElementById('executiveDashboard');
+    const spendRows = (org.top_projects_by_spend || []).slice(0, 8).map((p, i) => `
+      <div class="exec-row">
+        <span class="rank">${i + 1}</span>
+        <span>${esc(p.project_name)}</span>
+        <span>${esc(p.team || (p.employees?.[0]?.team) || 'Unassigned')}</span>
+        <span class="money">${fmtCost(p.total_cost_usd)}</span>
+        <span>${fmtNum(p.total_requests || 0)}</span>
+        <span>${p.employees?.length || 0}</span>
+      </div>
+    `).join('');
+    const valueRows = (org.high_value_projects || []).slice(0, 6).map((p, i) => `
+      <div class="exec-row compact">
+        <span class="rank">${i + 1}</span>
+        <span>${esc(p.project_name)}</span>
+        <span class="money">${fmtCost(p.cost_usd)}</span>
+        <span>${fmtNum(p.ai_loc)}</span>
+        <span>${p.ai_loc_per_dollar}/$</span>
+      </div>
+    `).join('');
+    const teamRows = (org.team_rollup || []).map(r => `
+      <div class="team-row">
+        <span class="team-name">${esc(r.team)}</span>
+        <span>${r.projects}</span>
+        <span>${r.employees}</span>
+        <span class="team-cost">${fmtCost(r.cost_usd)}</span>
+        <span>${fmtNum(r.requests)}</span>
+      </div>
+    `).join('');
+    const maskedRows = (investor.projects || []).slice(0, 8).map(p => `
+      <div class="exec-row compact">
+        <span>${esc(p.project_label)}</span>
+        <span>${esc(p.team_label)}</span>
+        <span>${p.people}</span>
+        <span class="money">${fmtCost(p.cost_usd)}</span>
+        <span>${esc(p.cost_band)}</span>
+      </div>
+    `).join('');
+    el.innerHTML = `
+      <div class="stat-cards">
+        ${statCard('AI Spend', fmtCost(t.cost_usd), 'project-attributed')}
+        ${statCard('Projects', fmtNum(t.projects || 0), 'active')}
+        ${statCard('People', fmtNum(t.employees || 0), 'contributors')}
+        ${statCard('AI LOC / $', t.ai_loc_per_dollar || 0, 'efficiency proxy')}
+        ${statCard('Cost / Request', `$${(t.cost_per_request || 0).toFixed(2)}`, 'blended')}
+      </div>
+      <div class="exec-actions">
+        <a class="btn" href="/api/org/export/projects.csv" target="_blank">⬇ Export Projects CSV</a>
+        <a class="btn" href="/api/org/export/projects.csv?masked=true" target="_blank">🔒 Export Masked CSV</a>
+        <a class="btn" href="/api/org/investor-view?reveal_financials=false" target="_blank">👁 Masked Investor JSON</a>
+      </div>
+      <div class="card-grid two-col">
+        <div class="card card-wide">
+          <h3>Where the Money Is Going</h3>
+          <div class="exec-table">
+            <div class="exec-row header"><span>#</span><span>Project</span><span>Team</span><span>Spend</span><span>Requests</span><span>People</span></div>
+            ${spendRows || emptyRow('No project spend yet')}
+          </div>
+        </div>
+        <div class="card card-wide">
+          <h3>Highest Output per Dollar</h3>
+          <div class="exec-table">
+            <div class="exec-row header compact"><span>#</span><span>Project</span><span>Spend</span><span>AI LOC</span><span>AI LOC/$</span></div>
+            ${valueRows || emptyRow('No value metrics yet')}
+          </div>
+        </div>
+        <div class="card card-wide">
+          <h3>Team Spend Rollup</h3>
+          <div class="team-breakdown">
+            <div class="team-row header"><span>Team</span><span>Projects</span><span>People</span><span>Spend</span><span>Requests</span></div>
+            ${teamRows || emptyRow('No team rollup yet')}
+          </div>
+        </div>
+        <div class="card card-wide">
+          <h3>Investor / Client Safe View</h3>
+          <p class="muted-copy">Project names, paths, clients, billing codes, and employee names are hidden. Financials can be shown exactly or as bands.</p>
+          <div class="exec-table">
+            <div class="exec-row header compact"><span>Project</span><span>Team</span><span>People</span><span>Spend</span><span>Band</span></div>
+            ${maskedRows || emptyRow('No masked data yet')}
+          </div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    console.error('Executive error:', e);
+    showToast('Failed to load executive view: ' + e.message);
+    document.getElementById('executiveDashboard').innerHTML = emptyState('Failed to load executive overview.');
+  } finally {
+    showLoading(false);
+  }
 }
 
 // ── Employees View ─────────────────────────────────────
