@@ -1,0 +1,820 @@
+"""SQLite data layer for the AIECO dashboard.
+
+Responsibilities:
+  * Open a connection to the SQLite DB (path from ``DB_PATH`` env var,
+    default ``./aieco.db``) and enable WAL mode for concurrent reads.
+  * Initialise the schema (employees, snapshots, metrics_summary,
+    anti_patterns) on startup.
+  * Provide query functions used by the API layer in ``main.py``.
+
+All functions use ``sqlite3.Row`` so rows behave like dicts. The module is
+import-safe (calling ``get_db_path`` / ``init_db`` is idempotent).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import secrets
+import sqlite3
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_DB_PATH = "./aieco.db"
+
+
+def get_db_path() -> str:
+    """Return the configured DB path (DB_PATH env var or default)."""
+    return os.environ.get("DB_PATH", DEFAULT_DB_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Connection management
+# ---------------------------------------------------------------------------
+
+
+def get_connection() -> sqlite3.Connection:
+    """Create a new SQLite connection configured for this app.
+
+    A fresh connection is created per call (FastAPI runs single-threaded by
+    default with sync endpoints, and SQLite connections are cheap). WAL mode
+    and foreign keys are enabled on every connection for safety.
+    """
+    path = get_db_path()
+    # ``check_same_thread=False`` lets the connection be used across threads
+    # if uvicorn is run with workers; we rely on WAL for concurrency.
+    conn = sqlite3.connect(path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    return conn
+
+
+@contextmanager
+def db() -> Iterator[sqlite3.Connection]:
+    """Context manager yielding a connection, committing/rolling back."""
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS employees (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    team TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    period_start TEXT,
+    period_end TEXT,
+    payload_json TEXT NOT NULL,
+    FOREIGN KEY (employee_id) REFERENCES employees(id)
+);
+
+CREATE TABLE IF NOT EXISTS metrics_summary (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    snapshot_id INTEGER NOT NULL,
+    period_start TEXT,
+    period_end TEXT,
+    total_sessions INTEGER,
+    total_requests INTEGER,
+    total_workspaces INTEGER,
+    total_ai_loc INTEGER,
+    total_input_tokens INTEGER,
+    total_output_tokens INTEGER,
+    estimated_cost_usd REAL,
+    score_prompt_quality REAL,
+    score_session_hygiene REAL,
+    score_code_review REAL,
+    score_tool_mastery REAL,
+    score_context_management REAL,
+    overall_score REAL,
+    FOREIGN KEY (employee_id) REFERENCES employees(id),
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+);
+
+CREATE TABLE IF NOT EXISTS anti_patterns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    snapshot_id INTEGER NOT NULL,
+    rule_id TEXT NOT NULL,
+    rule_name TEXT,
+    rule_group TEXT,
+    severity TEXT,
+    triggered INTEGER,
+    occurrences INTEGER,
+    total INTEGER,
+    examples_json TEXT,
+    FOREIGN KEY (employee_id) REFERENCES employees(id),
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshots_employee ON snapshots(employee_id);
+CREATE INDEX IF NOT EXISTS idx_metrics_employee ON metrics_summary(employee_id);
+CREATE INDEX IF NOT EXISTS idx_metrics_snapshot ON metrics_summary(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_anti_employee ON anti_patterns(employee_id);
+CREATE INDEX IF NOT EXISTS idx_anti_snapshot ON anti_patterns(snapshot_id);
+
+CREATE TABLE IF NOT EXISTS invite_codes (
+    code TEXT PRIMARY KEY,
+    team TEXT,
+    uses_remaining INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    expires_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    key_prefix TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TEXT,
+    FOREIGN KEY (employee_id) REFERENCES employees(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_employee ON api_keys(employee_id);
+"""
+
+
+def init_db() -> None:
+    """Create tables/indexes if they don't already exist."""
+    with db() as conn:
+        conn.executescript(SCHEMA_SQL)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _avg(scores: list[float]) -> float:
+    return round(sum(scores) / len(scores), 2) if scores else 0.0
+
+
+def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {k: row[k] for k in row.keys()}
+
+
+# ---------------------------------------------------------------------------
+# Auth / registration
+# ---------------------------------------------------------------------------
+
+
+def _hash_api_key(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def create_invite(code: str | None = None, team: str | None = None, uses_remaining: int = 1) -> dict[str, Any]:
+    """Create an invite code and return it."""
+    invite_code = code or "inv_" + secrets.token_urlsafe(12)
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO invite_codes (code, team, uses_remaining) VALUES (?, ?, ?)",
+            (invite_code, team, uses_remaining),
+        )
+    return {"code": invite_code, "team": team, "uses_remaining": uses_remaining}
+
+
+def list_invites() -> list[dict[str, Any]]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT code, team, uses_remaining, created_at, expires_at FROM invite_codes ORDER BY created_at DESC"
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
+def register_employee_from_invite(
+    invite_code: str,
+    *,
+    employee_id: str,
+    name: str | None = None,
+    team: str | None = None,
+) -> dict[str, Any] | None:
+    """Consume an invite and create an employee API key.
+
+    Returns {employee_id, api_key, key_prefix, team} or None when the invite is
+    invalid/exhausted.
+    """
+    if not invite_code or not employee_id:
+        return None
+    api_key = "ak_" + secrets.token_urlsafe(32)
+    key_hash = _hash_api_key(api_key)
+    key_prefix = api_key[:10]
+    with db() as conn:
+        inv = conn.execute(
+            "SELECT code, team, uses_remaining FROM invite_codes WHERE code = ?",
+            (invite_code,),
+        ).fetchone()
+        if inv is None or int(inv["uses_remaining"] or 0) <= 0:
+            return None
+        effective_team = team or inv["team"]
+        upsert_employee(conn, employee_id, name, effective_team)
+        conn.execute(
+            "UPDATE invite_codes SET uses_remaining = uses_remaining - 1 WHERE code = ?",
+            (invite_code,),
+        )
+        conn.execute(
+            "INSERT INTO api_keys (employee_id, key_hash, key_prefix) VALUES (?, ?, ?)",
+            (employee_id, key_hash, key_prefix),
+        )
+    return {"employee_id": employee_id, "api_key": api_key, "key_prefix": key_prefix, "team": effective_team}
+
+
+def create_employee_api_key(employee_id: str) -> dict[str, Any]:
+    """Create an additional API key for an existing employee."""
+    api_key = "ak_" + secrets.token_urlsafe(32)
+    key_hash = _hash_api_key(api_key)
+    key_prefix = api_key[:10]
+    with db() as conn:
+        emp = get_employee(conn, employee_id)
+        if emp is None:
+            upsert_employee(conn, employee_id, None, None)
+        conn.execute(
+            "INSERT INTO api_keys (employee_id, key_hash, key_prefix) VALUES (?, ?, ?)",
+            (employee_id, key_hash, key_prefix),
+        )
+    return {"employee_id": employee_id, "api_key": api_key, "key_prefix": key_prefix}
+
+
+def verify_api_key(api_key: str) -> str | None:
+    """Return employee_id for a valid non-revoked API key, else None."""
+    if not api_key:
+        return None
+    key_hash = _hash_api_key(api_key)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT employee_id FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL",
+            (key_hash,),
+        ).fetchone()
+        return row["employee_id"] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Employees
+# ---------------------------------------------------------------------------
+
+
+def upsert_employee(conn: sqlite3.Connection, employee_id: str, name: str | None, team: str | None) -> None:
+    """Insert employee if missing, or update name/team when provided."""
+    if name is None and team is None:
+        # Ensure the employee exists even without name/team.
+        conn.execute(
+            "INSERT OR IGNORE INTO employees (id, name, team) VALUES (?, NULL, NULL)",
+            (employee_id,),
+        )
+        return
+
+    # Upsert: insert if missing, otherwise update non-null fields.
+    conn.execute(
+        """
+        INSERT INTO employees (id, name, team)
+        VALUES (?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = COALESCE(excluded.name, employees.name),
+            team = COALESCE(excluded.team, employees.team)
+        """,
+        (employee_id, name, team),
+    )
+
+
+def get_employee(conn: sqlite3.Connection, employee_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def list_employees(team: str | None = None) -> list[dict[str, Any]]:
+    """List employees with their latest snapshot summary (see GET /api/employees)."""
+    with db() as conn:
+        # Latest snapshot id per employee (optionally filtered by team).
+        if team:
+            emp_rows = conn.execute(
+                "SELECT id, name, team, created_at FROM employees WHERE team = ? ORDER BY id",
+                (team,),
+            ).fetchall()
+        else:
+            emp_rows = conn.execute(
+                "SELECT id, name, team, created_at FROM employees ORDER BY id"
+            ).fetchall()
+
+        results: list[dict[str, Any]] = []
+        for er in emp_rows:
+            eid = er["id"]
+            # Latest snapshot for this employee.
+            snap = conn.execute(
+                "SELECT id, uploaded_at, period_start, period_end FROM snapshots "
+                "WHERE employee_id = ? ORDER BY id DESC LIMIT 1",
+                (eid,),
+            ).fetchone()
+            metrics: dict[str, Any] = {}
+            ap_count = 0
+            high_count = 0
+            latest_snapshot = None
+            period_start = None
+            period_end = None
+            anti_patterns: list[dict[str, Any]] = []
+            if snap:
+                latest_snapshot = snap["uploaded_at"]
+                period_start = snap["period_start"]
+                period_end = snap["period_end"]
+                mrow = conn.execute(
+                    "SELECT * FROM metrics_summary WHERE snapshot_id = ? LIMIT 1",
+                    (snap["id"],),
+                ).fetchone()
+                if mrow:
+                    metrics = {
+                        "total_sessions": mrow["total_sessions"],
+                        "total_requests": mrow["total_requests"],
+                        "total_workspaces": mrow["total_workspaces"],
+                        "total_ai_loc": mrow["total_ai_loc"],
+                        "total_input_tokens": mrow["total_input_tokens"],
+                        "total_output_tokens": mrow["total_output_tokens"],
+                        "estimated_cost_usd": mrow["estimated_cost_usd"],
+                        "score_prompt_quality": mrow["score_prompt_quality"],
+                        "score_session_hygiene": mrow["score_session_hygiene"],
+                        "score_code_review": mrow["score_code_review"],
+                        "score_tool_mastery": mrow["score_tool_mastery"],
+                        "score_context_management": mrow["score_context_management"],
+                        "overall_score": mrow["overall_score"],
+                    }
+                ap_row = conn.execute(
+                    "SELECT COUNT(*) AS c, "
+                    "SUM(CASE WHEN severity='high' AND triggered=1 THEN 1 ELSE 0 END) AS h "
+                    "FROM anti_patterns WHERE snapshot_id = ?",
+                    (snap["id"],),
+                ).fetchone()
+                ap_count = ap_row["c"] if ap_row else 0
+                high_count = ap_row["h"] if ap_row else 0
+                # Fetch triggered anti-patterns for this snapshot (for training matrix)
+                ap_detail_rows = conn.execute(
+                    "SELECT rule_id, rule_name, rule_group, severity, triggered, occurrences, total "
+                    "FROM anti_patterns WHERE snapshot_id = ? AND triggered = 1 "
+                    "ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, occurrences DESC",
+                    (snap["id"],),
+                ).fetchall()
+                anti_patterns = [
+                    {
+                        "rule_id": r["rule_id"],
+                        "rule_name": r["rule_name"],
+                        "rule_group": r["rule_group"],
+                        "severity": r["severity"],
+                        "triggered": bool(r["triggered"]),
+                        "occurrences": r["occurrences"],
+                        "total": r["total"],
+                    }
+                    for r in ap_detail_rows
+                ]
+
+            results.append(
+                {
+                    "employee_id": eid,
+                    "name": er["name"],
+                    "team": er["team"],
+                    "latest_snapshot": latest_snapshot,
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "metrics": metrics,
+                    "anti_patterns_count": ap_count,
+                    "high_severity_count": high_count,
+                    "anti_patterns": anti_patterns if snap else [],
+                }
+            )
+        return results
+
+
+# ---------------------------------------------------------------------------
+# Snapshots / ingest
+# ---------------------------------------------------------------------------
+
+
+def ingest_snapshot(payload: dict[str, Any]) -> int:
+    """Persist a full snapshot and its extracted rows. Returns snapshot id."""
+    employee_id = payload["employee_id"]
+    name = payload.get("employee_name")
+    team = payload.get("team")
+    period_start = payload.get("period_start")
+    period_end = payload.get("period_end")
+
+    summary = payload.get("summary") or {}
+    practice_scores = payload.get("practice_scores") or {}
+    anti_patterns = payload.get("anti_patterns") or []
+
+    s_total_sessions = int(summary.get("total_sessions", 0) or 0)
+    s_total_requests = int(summary.get("total_requests", 0) or 0)
+    s_total_workspaces = int(summary.get("total_workspaces", 0) or 0)
+    s_total_ai_loc = int(summary.get("total_ai_loc", 0) or 0)
+    s_total_input_tokens = int(summary.get("total_input_tokens", 0) or 0)
+    s_total_output_tokens = int(summary.get("total_output_tokens", 0) or 0)
+    s_estimated_cost = float(summary.get("estimated_cost_usd", 0.0) or 0.0)
+
+    # Scores may come in as {"prompt-quality": {"score": N, "weekly": [...]}}
+    # or as flat {"prompt_quality": N}. Handle both.
+    def _extract_score(key_hyphen: str, key_underscore: str) -> float:
+        val = practice_scores.get(key_hyphen)
+        if val is None:
+            val = practice_scores.get(key_underscore)
+        if isinstance(val, dict):
+            val = val.get("score")
+        try:
+            return float(val) if val is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    score_pq = _extract_score("prompt-quality", "prompt_quality")
+    score_sh = _extract_score("session-hygiene", "session_hygiene")
+    score_cr = _extract_score("code-review", "code_review")
+    score_tm = _extract_score("tool-mastery", "tool_mastery")
+    score_cm = _extract_score("context-management", "context_management")
+    overall = _avg([score_pq, score_sh, score_cr, score_tm, score_cm])
+
+    with db() as conn:
+        upsert_employee(conn, employee_id, name, team)
+
+        cur = conn.execute(
+            "INSERT INTO snapshots (employee_id, period_start, period_end, payload_json) "
+            "VALUES (?, ?, ?, ?)",
+            (employee_id, period_start, period_end, json.dumps(payload)),
+        )
+        snapshot_id = cur.lastrowid
+        if snapshot_id is None:  # pragma: no cover - INSERT always yields a rowid
+            raise RuntimeError("Failed to insert snapshot row")
+
+        conn.execute(
+            """
+            INSERT INTO metrics_summary (
+                employee_id, snapshot_id, period_start, period_end,
+                total_sessions, total_requests, total_workspaces, total_ai_loc,
+                total_input_tokens, total_output_tokens, estimated_cost_usd,
+                score_prompt_quality, score_session_hygiene, score_code_review,
+                score_tool_mastery, score_context_management, overall_score
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                employee_id, snapshot_id, period_start, period_end,
+                s_total_sessions, s_total_requests, s_total_workspaces, s_total_ai_loc,
+                s_total_input_tokens, s_total_output_tokens, s_estimated_cost,
+                score_pq, score_sh, score_cr, score_tm, score_cm, overall,
+            ),
+        )
+
+        # Anti-patterns: delete old ones for this snapshot first (defensive;
+        # a snapshot is new, but this keeps re-ingestion of the same logical
+        # snapshot id safe if ever reused).
+        conn.execute("DELETE FROM anti_patterns WHERE snapshot_id = ?", (snapshot_id,))
+        for ap in anti_patterns:
+            triggered_val = ap.get("triggered", False)
+            triggered_int = 1 if triggered_val else 0
+            examples = ap.get("examples")
+            examples_json = json.dumps(examples) if examples is not None else None
+            conn.execute(
+                """
+                INSERT INTO anti_patterns (
+                    employee_id, snapshot_id, rule_id, rule_name, rule_group,
+                    severity, triggered, occurrences, total, examples_json
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    employee_id, snapshot_id,
+                    ap.get("rule_id"), ap.get("rule_name"), ap.get("rule_group"),
+                    ap.get("severity"), triggered_int,
+                    int(ap.get("occurrences", 0) or 0), int(ap.get("total", 0) or 0),
+                    examples_json,
+                ),
+            )
+
+        return snapshot_id
+
+
+def get_latest_snapshot_payload(conn: sqlite3.Connection, employee_id: str) -> dict[str, Any] | None:
+    """Return the full parsed payload for an employee's latest snapshot."""
+    row = conn.execute(
+        "SELECT id, uploaded_at, payload_json FROM snapshots "
+        "WHERE employee_id = ? ORDER BY id DESC LIMIT 1",
+        (employee_id,),
+    ).fetchone()
+    if not row:
+        return None
+    payload = json.loads(row["payload_json"])
+    # Attach server-side metadata.
+    payload["_snapshot_id"] = row["id"]
+    payload["_uploaded_at"] = row["uploaded_at"]
+    return payload
+
+
+def get_anti_patterns_for_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM anti_patterns WHERE snapshot_id = ? ORDER BY id",
+        (snapshot_id,),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = _row_to_dict(r)
+        d["triggered"] = bool(d["triggered"])
+        if d.get("examples_json") is not None:
+            d["examples"] = json.loads(d["examples_json"])
+        del d["examples_json"]
+        out.append(d)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Employee detail + history
+# ---------------------------------------------------------------------------
+
+
+def get_employee_detail(employee_id: str) -> dict[str, Any] | None:
+    """Assemble the full detail view for one employee (latest snapshot)."""
+    with db() as conn:
+        emp = get_employee(conn, employee_id)
+        if not emp:
+            return None
+
+        payload = get_latest_snapshot_payload(conn, employee_id)
+        if not payload:
+            return {
+                "employee_id": employee_id,
+                "name": emp["name"],
+                "team": emp["team"],
+                "latest_snapshot": None,
+                "summary": {},
+                "practice_scores": {},
+                "anti_patterns": [],
+                "model_usage": {},
+                "work_types": {},
+                "activity": {},
+                "recommendations": {"training": [], "plan": None},
+            }
+
+        snapshot_id = payload["_snapshot_id"]
+        uploaded_at = payload["_uploaded_at"]
+
+        # Use payload sections (preserved as-is) for the response.
+        anti_patterns = get_anti_patterns_for_snapshot(conn, snapshot_id)
+
+        detail = {
+            "employee_id": employee_id,
+            "name": emp["name"],
+            "team": emp["team"],
+            "latest_snapshot": uploaded_at,
+            "period_start": payload.get("period_start"),
+            "period_end": payload.get("period_end"),
+            "summary": payload.get("summary") or {},
+            "practice_scores": payload.get("practice_scores") or {},
+            "anti_patterns": anti_patterns,
+            "model_usage": payload.get("model_usage") or {},
+            "work_types": payload.get("work_types") or {},
+            "activity": payload.get("activity") or {},
+        }
+
+        # Recommendations computed from the assembled data.
+        from recommendations import recommendations_for_employee
+
+        rec_input = {
+            "summary": detail["summary"],
+            "practice_scores": detail["practice_scores"],
+            "anti_patterns": anti_patterns,
+        }
+        detail["recommendations"] = recommendations_for_employee(rec_input)
+        return detail
+
+
+def get_employee_history(employee_id: str) -> list[dict[str, Any]]:
+    """Return score history for an employee from metrics_summary."""
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT ms.snapshot_id, s.uploaded_at, ms.period_start, ms.period_end,
+                   ms.overall_score, ms.score_prompt_quality, ms.score_session_hygiene,
+                   ms.score_code_review, ms.score_tool_mastery, ms.score_context_management
+            FROM metrics_summary ms
+            JOIN snapshots s ON s.id = ms.snapshot_id
+            WHERE ms.employee_id = ?
+            ORDER BY ms.snapshot_id ASC
+            """,
+            (employee_id,),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            out.append(
+                {
+                    "snapshot_id": r["snapshot_id"],
+                    "uploaded_at": r["uploaded_at"],
+                    "period_start": r["period_start"],
+                    "period_end": r["period_end"],
+                    "overall_score": r["overall_score"],
+                    "scores": {
+                        "prompt_quality": r["score_prompt_quality"],
+                        "session_hygiene": r["score_session_hygiene"],
+                        "code_review": r["score_code_review"],
+                        "tool_mastery": r["score_tool_mastery"],
+                        "context_management": r["score_context_management"],
+                    },
+                }
+            )
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Team overview
+# ---------------------------------------------------------------------------
+
+
+def get_team_overview() -> dict[str, Any]:
+    """Aggregate team-wide stats from each employee's latest snapshot."""
+    with db() as conn:
+        employees = conn.execute("SELECT id, name, team FROM employees").fetchall()
+        total_employees = len(employees)
+        if total_employees == 0:
+            return {
+                "total_employees": 0,
+                "total_requests": 0,
+                "total_cost_usd": 0.0,
+                "avg_overall_score": 0.0,
+                "team_breakdown": {},
+                "top_training_needs": [],
+                "plan_recommendations": [],
+                "score_distribution": {
+                    "excellent": 0,
+                    "good": 0,
+                    "needs_improvement": 0,
+                    "at_risk": 0,
+                },
+            }
+
+        # Gather per-employee latest snapshot data.
+        per_employee: list[dict[str, Any]] = []
+        for emp in employees:
+            eid = emp["id"]
+            snap = conn.execute(
+                "SELECT id FROM snapshots WHERE employee_id = ? ORDER BY id DESC LIMIT 1",
+                (eid,),
+            ).fetchone()
+            if not snap:
+                continue
+            m = conn.execute(
+                "SELECT * FROM metrics_summary WHERE snapshot_id = ? LIMIT 1",
+                (snap["id"],),
+            ).fetchone()
+            if not m:
+                continue
+            aps = get_anti_patterns_for_snapshot(conn, snap["id"])
+            per_employee.append(
+                {
+                    "employee_id": eid,
+                    "team": emp["team"],
+                    "total_requests": m["total_requests"],
+                    "estimated_cost_usd": m["estimated_cost_usd"],
+                    "overall_score": m["overall_score"],
+                    "anti_patterns": aps,
+                    "summary": {
+                        "total_requests": m["total_requests"],
+                        "estimated_cost_usd": m["estimated_cost_usd"],
+                    },
+                    "practice_scores": {
+                        "prompt_quality": m["score_prompt_quality"],
+                        "session_hygiene": m["score_session_hygiene"],
+                        "code_review": m["score_code_review"],
+                        "tool_mastery": m["score_tool_mastery"],
+                        "context_management": m["score_context_management"],
+                    },
+                }
+            )
+
+        total_requests = sum(int(e["total_requests"] or 0) for e in per_employee)
+        total_cost = round(sum(float(e["estimated_cost_usd"] or 0) for e in per_employee), 2)
+        scores = [float(e["overall_score"] or 0) for e in per_employee]
+        avg_score = round(sum(scores) / len(scores), 2) if scores else 0.0
+
+        # Team breakdown.
+        team_breakdown: dict[str, dict[str, Any]] = {}
+        for e in per_employee:
+            t = e["team"] or "unassigned"
+            tb = team_breakdown.setdefault(t, {"employees": 0, "avg_score": 0.0, "total_cost": 0.0, "total_requests": 0, "_scores": []})
+            tb["employees"] += 1
+            tb["total_cost"] = round(tb["total_cost"] + float(e["estimated_cost_usd"] or 0), 2)
+            tb["total_requests"] += int(e["total_requests"] or 0)
+            tb["_scores"].append(float(e["overall_score"] or 0))
+        for t, tb in team_breakdown.items():
+            tb["avg_score"] = round(sum(tb["_scores"]) / len(tb["_scores"]), 2) if tb["_scores"] else 0.0
+            del tb["_scores"]
+
+        # Score distribution buckets (aligned with frontend: 80/60/40).
+        def bucket(s: float) -> str:
+            if s >= 80:
+                return "excellent"
+            if s >= 60:
+                return "good"
+            if s >= 40:
+                return "needs_improvement"
+            return "at_risk"
+
+        score_distribution = {"excellent": 0, "good": 0, "needs_improvement": 0, "at_risk": 0}
+        for s in scores:
+            score_distribution[bucket(s)] += 1
+
+        # Top training needs: aggregate training recommendations across team.
+        from recommendations import training_recommendations
+
+        all_recs: list[dict[str, Any]] = []
+        for e in per_employee:
+            recs = training_recommendations(e["anti_patterns"])
+            for r in recs:
+                all_recs.append(r)
+
+        # Aggregate by track.
+        track_agg: dict[str, dict[str, Any]] = {}
+        for r in all_recs:
+            track = r["track"]
+            ta = track_agg.setdefault(
+                track,
+                {"track": track, "employees_needing": 0, "modules": set(), "_severities": []},
+            )
+            ta["employees_needing"] += 1
+            ta["modules"].add(r["module"])
+            ta["_severities"].append(r["severity"])
+        # Determine avg severity per track (highest common severity).
+        sev_rank = {"high": 0, "medium": 1, "low": 2}
+        top_training_needs: list[dict[str, Any]] = []
+        for track, ta in track_agg.items():
+            sev_counts = {"high": 0, "medium": 0, "low": 0}
+            for s in ta["_severities"]:
+                sev_counts[s] = sev_counts.get(s, 0) + 1
+            # Avg severity = the modal severity, leaning high.
+            if sev_counts["high"] > 0:
+                avg_sev = "high"
+            elif sev_counts["medium"] > 0:
+                avg_sev = "medium"
+            else:
+                avg_sev = "low"
+            top_training_needs.append(
+                {
+                    "track": track,
+                    "employees_needing": ta["employees_needing"],
+                    "avg_severity": avg_sev,
+                    "modules": sorted(ta["modules"]),
+                }
+            )
+        top_training_needs.sort(key=lambda x: (sev_rank.get(x["avg_severity"], 9), -x["employees_needing"]))
+
+        # Plan recommendations for each employee.
+        from recommendations import recommend_plan
+
+        plan_recommendations: list[dict[str, Any]] = []
+        for e in per_employee:
+            rec = recommend_plan(e)
+            plan_recommendations.append(
+                {
+                    "employee_id": e["employee_id"],
+                    "recommendation": rec["action"],
+                    "plan": rec["plan"],
+                    "reason": rec["reason"],
+                }
+            )
+        # Sort: upgrade first, then train_first, review, maintain.
+        action_order = {"upgrade": 0, "train_first": 1, "review": 2, "maintain": 3}
+        plan_recommendations.sort(key=lambda x: action_order.get(x["recommendation"], 9))
+
+        return {
+            "total_employees": total_employees,
+            "total_requests": total_requests,
+            "total_cost_usd": total_cost,
+            "avg_overall_score": avg_score,
+            "team_breakdown": team_breakdown,
+            "top_training_needs": top_training_needs,
+            "plan_recommendations": plan_recommendations,
+            "score_distribution": score_distribution,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+
+
+def count_employees() -> int:
+    with db() as conn:
+        row = conn.execute("SELECT COUNT(*) AS c FROM employees").fetchone()
+        return row["c"] if row else 0

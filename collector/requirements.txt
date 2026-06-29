@@ -1,0 +1,2 @@
+# No external dependencies — Python 3.9+ standard library only.
+# (json, re, os, pathlib, datetime, collections, dataclasses, argparse, urllib)

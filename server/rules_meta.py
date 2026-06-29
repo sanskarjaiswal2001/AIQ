@@ -1,0 +1,221 @@
+"""Static metadata for all anti-pattern rules.
+
+This module hardcodes the metadata (id, name, group, severity, description,
+suggestion, training) for all 20 anti-pattern rules that the collector can
+detect. The dashboard uses this to render human-readable rule descriptions
+and to map triggered rules to training tracks.
+
+The ``group`` field uses the 5 practice groups from AIEC:
+  prompt-quality, session-hygiene, code-review, tool-mastery, context-management
+
+The ``training`` field maps each rule to a training track + module + priority,
+mirroring the TRAINING_MAP in recommendations.py.
+"""
+
+from __future__ import annotations
+
+# Each entry: id, name, group, severity, description, suggestion, training.
+RULES_META: list[dict] = [
+    # --- Prompt Quality ---
+    {
+        "id": "lazy-prompting",
+        "name": "Lazy Prompting",
+        "group": "prompt-quality",
+        "severity": "medium",
+        "description": "Very short, low-context prompts that force the model to guess intent, producing low-quality or off-target output.",
+        "suggestion": "Add explicit context, constraints, and desired output format to every prompt.",
+        "training": {"track": "Prompt Engineering", "module": "Writing Effective Prompts", "priority": "high"},
+    },
+    {
+        "id": "repeated-prompts",
+        "name": "Repeated Prompts",
+        "group": "prompt-quality",
+        "severity": "medium",
+        "description": "The same or near-duplicate prompt is sent multiple times, indicating a lack of iterative refinement.",
+        "suggestion": "Build on previous responses iteratively instead of re-issuing the same prompt.",
+        "training": {"track": "Prompt Engineering", "module": "Iterative Prompting Techniques", "priority": "medium"},
+    },
+    {
+        "id": "no-spec-driven-development",
+        "name": "No Spec-Driven Development",
+        "group": "prompt-quality",
+        "severity": "medium",
+        "description": "Work is performed without a written spec or task definition, leading to scope creep and rework.",
+        "suggestion": "Define a short spec or task description before starting AI-assisted work.",
+        "training": {"track": "Prompt Engineering", "module": "Spec-Driven Development", "priority": "high"},
+    },
+    {
+        "id": "verbose-prompt-no-compression",
+        "name": "Verbose Prompt Without Compression",
+        "group": "prompt-quality",
+        "severity": "medium",
+        "description": "Prompts are excessively long without using context compression, file references, or skills.",
+        "suggestion": "Use file references, skills, and context compression to keep prompts concise.",
+        "training": {"track": "Prompt Engineering", "module": "Prompt Compression & Context", "priority": "medium"},
+    },
+    {
+        "id": "no-plan-mode",
+        "name": "No Plan Mode Usage",
+        "group": "prompt-quality",
+        "severity": "low",
+        "description": "Plan mode is never used for complex tasks, missing an opportunity to align before execution.",
+        "suggestion": "Use plan mode for multi-step or ambiguous tasks to align before executing.",
+        "training": {"track": "Prompt Engineering", "module": "Using Plan Mode Effectively", "priority": "low"},
+    },
+    {
+        "id": "no-skills",
+        "name": "No Reusable Skills",
+        "group": "prompt-quality",
+        "severity": "low",
+        "description": "No reusable skills are created or used, leading to repeated manual context entry.",
+        "suggestion": "Create reusable skills for repeated workflows to encode best practices.",
+        "training": {"track": "Prompt Engineering", "module": "Creating Reusable Skills", "priority": "medium"},
+    },
+    # --- Code Review ---
+    {
+        "id": "speed-accept",
+        "name": "Speed Accept (No Review)",
+        "group": "code-review",
+        "severity": "high",
+        "description": "AI-generated code is accepted within a very short window, indicating insufficient human review.",
+        "suggestion": "Review generated code carefully before accepting; verify logic, security, and tests.",
+        "training": {"track": "AI Code Review", "module": "Reviewing AI-Generated Code", "priority": "high"},
+    },
+    {
+        "id": "copy-paste-blindness",
+        "name": "Copy-Paste Blindness",
+        "group": "code-review",
+        "severity": "medium",
+        "description": "Large blocks of AI output are pasted without modification or review, propagating errors.",
+        "suggestion": "Validate generated code in context; never paste blindly.",
+        "training": {"track": "AI Code Review", "module": "Validating Generated Code", "priority": "high"},
+    },
+    # --- Tool Mastery ---
+    {
+        "id": "premium-waste",
+        "name": "Premium Model Waste",
+        "group": "tool-mastery",
+        "severity": "medium",
+        "description": "Premium/expensive models are used for trivial tasks that a cheaper model could handle.",
+        "suggestion": "Route simple tasks to cheaper models; reserve premium models for hard problems.",
+        "training": {"track": "Model & Tool Selection", "module": "Cost-Aware Model Routing", "priority": "high"},
+    },
+    {
+        "id": "premium-for-lookup-questions",
+        "name": "Premium For Lookup Questions",
+        "group": "tool-mastery",
+        "severity": "medium",
+        "description": "Premium models are used for simple factual/lookup questions that a base model can answer.",
+        "suggestion": "Use a cheaper model or tool for lookup-style questions.",
+        "training": {"track": "Model & Tool Selection", "module": "Choosing the Right Model", "priority": "medium"},
+    },
+    {
+        "id": "model-overreliance",
+        "name": "Model Overreliance",
+        "group": "tool-mastery",
+        "severity": "medium",
+        "description": "A single model is used for nearly all requests, missing the benefits of multi-model workflows.",
+        "suggestion": "Diversify model usage; match model capability to task difficulty.",
+        "training": {"track": "Model & Tool Selection", "module": "Multi-Model Workflows", "priority": "medium"},
+    },
+    # --- Session Hygiene ---
+    {
+        "id": "runaway-agent-loops",
+        "name": "Runaway Agent Loops",
+        "group": "session-hygiene",
+        "severity": "high",
+        "description": "Agent requests use an excessive number of tools, indicating the agent may be spinning on failing approaches.",
+        "suggestion": "Break complex tasks into smaller, focused requests. If the agent is looping, cancel and rephrase.",
+        "training": {"track": "Agent Orchestration", "module": "Managing Agent Loops", "priority": "high"},
+    },
+    {
+        "id": "session-drift",
+        "name": "Session Drift",
+        "group": "session-hygiene",
+        "severity": "medium",
+        "description": "Sessions accumulate 30+ requests, diluting context and quality.",
+        "suggestion": "Keep sessions focused on a single task; start a new session for new topics.",
+        "training": {"track": "Agent Orchestration", "module": "Session Management", "priority": "medium"},
+    },
+    {
+        "id": "mega-sessions",
+        "name": "Mega Sessions",
+        "group": "session-hygiene",
+        "severity": "medium",
+        "description": "Sessions with 50+ requests indicate context overload and runaway complexity.",
+        "suggestion": "Break complex work into smaller, focused sessions.",
+        "training": {"track": "Agent Orchestration", "module": "Breaking Down Complex Tasks", "priority": "medium"},
+    },
+    {
+        "id": "high-cancellation",
+        "name": "High Cancellation Rate",
+        "group": "session-hygiene",
+        "severity": "medium",
+        "description": "A high proportion of requests are cancelled, wasting tokens and indicating misprompting.",
+        "suggestion": "Refine prompts before sending; cancel only when truly necessary.",
+        "training": {"track": "Workflow Optimization", "module": "Reducing Cancellations", "priority": "medium"},
+    },
+    {
+        "id": "frustration-signals",
+        "name": "Frustration Signals",
+        "group": "session-hygiene",
+        "severity": "medium",
+        "description": "Signs of frustration (retries, expletives, repeated cancellations) detected in sessions.",
+        "suggestion": "Step back and re-scope the task when frustration signals appear.",
+        "training": {"track": "Workflow Optimization", "module": "Managing AI Frustration", "priority": "medium"},
+    },
+    # --- Context Management ---
+    {
+        "id": "context-engineering-gaps",
+        "name": "Context Engineering Gaps",
+        "group": "context-management",
+        "severity": "medium",
+        "description": "Missing context engineering setup: no custom agents, skills, MCP tools, file references, or custom instructions.",
+        "suggestion": "Set up AGENTS.md, skills, MCP tools, file references, and custom instructions.",
+        "training": {"track": "Context Engineering", "module": "Setting Up AGENTS.md & Skills", "priority": "high"},
+    },
+    {
+        "id": "tunnel-vision",
+        "name": "Tunnel Vision",
+        "group": "context-management",
+        "severity": "low",
+        "description": "Work is concentrated in a single project/workspace with no diversification.",
+        "suggestion": "Diversify project context to broaden the model's useful context.",
+        "training": {"track": "Workflow Optimization", "module": "Diversifying Project Context", "priority": "low"},
+    },
+    # --- Work-Life Balance (session-hygiene group) ---
+    {
+        "id": "late-night-coding",
+        "name": "Late-Night Coding",
+        "group": "session-hygiene",
+        "severity": "low",
+        "description": "A significant portion of AI usage occurs during late-night hours (22:00-05:00).",
+        "suggestion": "Encourage sustainable working hours; late-night AI use correlates with lower quality.",
+        "training": {"track": "Work-Life Balance", "module": "Sustainable AI Usage", "priority": "low"},
+    },
+    {
+        "id": "weekend-overwork",
+        "name": "Weekend Overwork",
+        "group": "session-hygiene",
+        "severity": "low",
+        "description": "Heavy AI usage on weekends indicates potential overwork.",
+        "suggestion": "Protect weekend rest; monitor for burnout signals.",
+        "training": {"track": "Work-Life Balance", "module": "Sustainable AI Usage", "priority": "low"},
+    },
+]
+
+# Quick lookup by rule id.
+RULES_BY_ID: dict[str, dict] = {r["id"]: r for r in RULES_META}
+
+# Ordered set of all rule ids (order is stable and matches RULES_META).
+ALL_RULE_IDS: list[str] = [r["id"] for r in RULES_META]
+
+
+def get_rule(rule_id: str) -> dict | None:
+    """Return the metadata dict for a rule id, or None if unknown."""
+    return RULES_BY_ID.get(rule_id)
+
+
+def all_rules() -> list[dict]:
+    """Return metadata for all rules (a fresh list of plain dicts)."""
+    return [dict(r) for r in RULES_META]

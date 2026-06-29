@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Engineering Efficiency Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">⚡</span>
+          <span class="logo-text">AI Efficiency</span>
+        </div>
+      </div>
+      <ul class="nav-items">
+        <li class="nav-item active" data-view="overview">
+          <span class="nav-icon">📊</span> Team Overview
+        </li>
+        <li class="nav-item" data-view="employees">
+          <span class="nav-icon">👥</span> Employees
+        </li>
+        <li class="nav-item" data-view="training">
+          <span class="nav-icon">🎓</span> Training Needs
+        </li>
+        <li class="nav-item" data-view="plans">
+          <span class="nav-icon">📦</span> Plan Recommendations
+        </li>
+        <li class="nav-item" data-view="rules">
+          <span class="nav-icon">📐</span> Anti-Pattern Rules
+        </li>
+        <li class="nav-item" data-view="me">
+          <span class="nav-icon">🙋</span> My Dashboard
+        </li>
+      </ul>
+      <div class="sidebar-footer">
+        <div class="server-status" id="serverStatus">
+          <span class="status-dot"></span>
+          <span class="status-text">Connecting…</span>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main content -->
+    <main class="main-content">
+      <!-- Header -->
+      <header class="topbar">
+        <h1 id="pageTitle">Team Overview</h1>
+        <div class="topbar-actions">
+          <button class="btn btn-secondary" id="refreshBtn">
+            <span>↻</span> Refresh
+          </button>
+        </div>
+      </header>
+
+      <!-- Loading state -->
+      <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <p>Loading data…</p>
+      </div>
+
+      <!-- Views container -->
+      <div class="views-container">
+        <!-- Overview View -->
+        <div class="view active" id="view-overview">
+          <div class="stat-cards" id="overviewStats"></div>
+          <div class="card-grid">
+            <div class="card card-wide">
+              <h3>Score Distribution</h3>
+              <div id="scoreDistribution" class="score-dist"></div>
+            </div>
+            <div class="card card-wide">
+              <h3>Team Breakdown</h3>
+              <div id="teamBreakdown" class="team-breakdown"></div>
+            </div>
+            <div class="card card-wide">
+              <h3>Top Training Needs</h3>
+              <div id="topTrainingNeeds" class="training-needs"></div>
+            </div>
+            <div class="card card-wide">
+              <h3>Plan Recommendations</h3>
+              <div id="planRecommendations" class="plan-recs"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Employees View -->
+        <div class="view" id="view-employees">
+          <div class="filters">
+            <select id="teamFilter" class="filter-select">
+              <option value="">All Teams</option>
+            </select>
+            <select id="sortBy" class="filter-select">
+              <option value="overall_score">Sort: Overall Score</option>
+              <option value="total_requests">Sort: Total Requests</option>
+              <option value="estimated_cost_usd">Sort: Cost</option>
+              <option value="employee_id">Sort: Name</option>
+            </select>
+            <select id="sortOrder" class="filter-select">
+              <option value="desc">Descending</option>
+              <option value="asc">Ascending</option>
+            </select>
+          </div>
+          <div class="employee-grid" id="employeeGrid"></div>
+        </div>
+
+        <!-- Training View -->
+        <div class="view" id="view-training">
+          <div id="trainingMatrix" class="training-matrix"></div>
+        </div>
+
+        <!-- Plans View -->
+        <div class="view" id="view-plans">
+          <div id="plansList" class="plans-list"></div>
+        </div>
+
+        <!-- Rules View -->
+        <div class="view" id="view-rules">
+          <div id="rulesList" class="rules-list"></div>
+        </div>
+
+        <!-- My Dashboard View -->
+        <div class="view" id="view-me">
+          <div id="meDashboard" class="employee-self-view"></div>
+        </div>
+      </div>
+
+      <!-- Employee detail modal -->
+      <div class="modal-overlay" id="employeeModal">
+        <div class="modal">
+          <div class="modal-header">
+            <h2 id="modalTitle">Employee Details</h2>
+            <button class="modal-close" id="modalClose">✕</button>
+          </div>
+          <div class="modal-body" id="modalBody"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

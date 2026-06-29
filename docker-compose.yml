@@ -1,0 +1,37 @@
+# ===========================================================================
+# AIQ — docker-compose for the mothership (server + dashboard)
+# ===========================================================================
+#   docker compose up --build      # build + start
+#   docker compose up -d           # start detached
+#   docker compose logs -f         # tail logs
+#   docker compose down            # stop + remove containers
+#
+# Configuration:
+#   Copy .env.example → .env and set AIQ_ADMIN_KEY for Phase-2 auth.
+#   With an empty key the API runs without auth (MVP behaviour).
+# ===========================================================================
+
+services:
+  aiq:
+    build: .
+    image: aiq:latest
+    container_name: aiq
+    ports:
+      - "${AIQ_PORT:-8000}:8000"
+    volumes:
+      - aiq-data:/data
+    environment:
+      - DB_PATH=/data/aiq.db
+      - DASHBOARD_DIR=/app/dashboard
+      # Phase-2 admin API key (empty = no auth for MVP).
+      - AIQ_ADMIN_KEY=${AIQ_ADMIN_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  aiq-data:
