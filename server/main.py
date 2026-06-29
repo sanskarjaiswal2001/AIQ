@@ -19,7 +19,7 @@ import os
 import re
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -264,6 +264,63 @@ def team_overview() -> dict[str, Any]:
 def rules() -> list[dict[str, Any]]:
     """Static metadata for all anti-pattern rules."""
     return all_rules()
+
+
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/projects")
+def projects_list() -> list[dict[str, Any]]:
+    """List all projects with cross-employee aggregated stats."""
+    return db.get_all_projects()
+
+
+@app.get("/api/projects/{project_id}")
+def project_detail(project_id: str) -> dict[str, Any]:
+    """Detail for one project with per-employee breakdown."""
+    detail = db.get_project_detail(project_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return detail
+
+
+@app.patch("/api/projects/{project_id}")
+def update_project(project_id: str, body: dict[str, Any] = Body(...)):
+    """Admin-update project metadata (team, client, billing_code)."""
+    ok = db.update_project_metadata(
+        project_id,
+        team=body.get("team"),
+        client=body.get("client"),
+        billing_code=body.get("billing_code"),
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"status": "ok", "project_id": project_id}
+
+
+# ---------------------------------------------------------------------------
+# Plan catalog
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/plans")
+def plans_catalog() -> dict[str, Any]:
+    """Return the full plan catalog for frontend dropdowns."""
+    try:
+        from plan_catalog import PLAN_CATALOG, get_all_providers
+        try:
+            from plan_catalog import BILLING_MODES
+        except ImportError:
+            BILLING_MODES = {}
+        return {
+            "providers": get_all_providers(),
+            "billing_modes": BILLING_MODES,
+            "plans": PLAN_CATALOG,
+        }
+    except ImportError:
+        return {"providers": [], "billing_modes": {}, "plans": []}
 
 
 # ---------------------------------------------------------------------------

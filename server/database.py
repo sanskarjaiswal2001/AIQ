@@ -157,6 +157,44 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_employee ON api_keys(employee_id);
+
+CREATE TABLE IF NOT EXISTS projects (
+    project_id TEXT PRIMARY KEY,
+    project_name TEXT,
+    project_path TEXT,
+    team TEXT,
+    client TEXT,
+    billing_code TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS project_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    employee_id TEXT NOT NULL,
+    snapshot_id INTEGER NOT NULL,
+    sessions INTEGER,
+    requests INTEGER,
+    ai_loc INTEGER,
+    user_loc INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    estimated_cost_usd REAL,
+    first_activity TEXT,
+    last_activity TEXT,
+    active_days INTEGER,
+    model_usage_json TEXT,
+    work_types_json TEXT,
+    git_branches_json TEXT,
+    files_edited_count INTEGER,
+    FOREIGN KEY (project_id) REFERENCES projects(project_id),
+    FOREIGN KEY (employee_id) REFERENCES employees(id),
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_proj_snap_project ON project_snapshots(project_id);
+CREATE INDEX IF NOT EXISTS idx_proj_snap_employee ON project_snapshots(employee_id);
+CREATE INDEX IF NOT EXISTS idx_proj_snap_snapshot ON project_snapshots(snapshot_id);
 """
 
 
@@ -505,6 +543,52 @@ def ingest_snapshot(payload: dict[str, Any]) -> int:
                 ),
             )
 
+        # Store project-level data from the payload
+        projects = payload.get("projects") or []
+        for proj in projects:
+            pid = proj.get("project_id") or ""
+            if not pid:
+                continue
+            # Upsert project metadata (admin-assignable fields stay if already set)
+            existing = conn.execute(
+                "SELECT team, client, billing_code FROM projects WHERE project_id = ?",
+                (pid,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE projects SET project_name = ?, project_path = ? WHERE project_id = ?",
+                    (proj.get("project_name"), proj.get("project_path"), pid),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO projects (project_id, project_name, project_path) VALUES (?, ?, ?)",
+                    (pid, proj.get("project_name"), proj.get("project_path")),
+                )
+
+            conn.execute(
+                """
+                INSERT INTO project_snapshots (
+                    project_id, employee_id, snapshot_id, sessions, requests,
+                    ai_loc, user_loc, input_tokens, output_tokens, estimated_cost_usd,
+                    first_activity, last_activity, active_days,
+                    model_usage_json, work_types_json, git_branches_json, files_edited_count
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    pid, employee_id, snapshot_id,
+                    proj.get("sessions", 0), proj.get("requests", 0),
+                    proj.get("ai_loc", 0), proj.get("user_loc", 0),
+                    proj.get("input_tokens", 0), proj.get("output_tokens", 0),
+                    proj.get("estimated_cost_usd", 0.0),
+                    proj.get("first_activity"), proj.get("last_activity"),
+                    proj.get("active_days", 0),
+                    json.dumps(proj.get("model_usage") or {}),
+                    json.dumps(proj.get("work_types") or {}),
+                    json.dumps(proj.get("git_branches") or []),
+                    proj.get("files_edited_count", 0),
+                ),
+            )
+
         return snapshot_id
 
 
@@ -820,3 +904,141 @@ def count_employees() -> int:
     with db() as conn:
         row = conn.execute("SELECT COUNT(*) AS c FROM employees").fetchone()
         return row["c"] if row else 0
+
+
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
+
+
+def get_all_projects() -> list[dict[str, Any]]:
+    """Return all projects with cross-employee aggregated stats from latest snapshots.
+
+    Clubs project_snapshots from various employees working on the same project,
+    taking each employee's latest snapshot to avoid double-counting.
+    """
+    with db() as conn:
+        # Get each employee's latest snapshot_id
+        latest_snapshots = conn.execute(
+            """
+            SELECT s.employee_id, MAX(s.id) AS snapshot_id
+            FROM snapshots s
+            GROUP BY s.employee_id
+            """
+        ).fetchall()
+        if not latest_snapshots:
+            return []
+
+        snap_ids = [r["snapshot_id"] for r in latest_snapshots]
+        placeholders = ",".join("?" * len(snap_ids))
+
+        rows = conn.execute(
+            f"""
+            SELECT ps.project_id, p.project_name, p.project_path, p.team, p.client, p.billing_code,
+                   ps.employee_id, ps.sessions, ps.requests, ps.ai_loc, ps.user_loc,
+                   ps.input_tokens, ps.output_tokens, ps.estimated_cost_usd,
+                   ps.first_activity, ps.last_activity, ps.active_days,
+                   ps.model_usage_json, ps.work_types_json, ps.git_branches_json, ps.files_edited_count,
+                   e.name AS employee_name, e.team AS employee_team
+            FROM project_snapshots ps
+            JOIN projects p ON p.project_id = ps.project_id
+            JOIN employees e ON e.id = ps.employee_id
+            WHERE ps.snapshot_id IN ({placeholders})
+            ORDER BY ps.project_id, ps.estimated_cost_usd DESC
+            """,
+            snap_ids,
+        ).fetchall()
+
+        # Group by project_id, aggregating across employees
+        projects_map: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            pid = r["project_id"]
+            if pid not in projects_map:
+                projects_map[pid] = {
+                    "project_id": pid,
+                    "project_name": r["project_name"],
+                    "project_path": r["project_path"],
+                    "team": r["team"],
+                    "client": r["client"],
+                    "billing_code": r["billing_code"],
+                    "employees": [],
+                    "total_sessions": 0,
+                    "total_requests": 0,
+                    "total_ai_loc": 0,
+                    "total_user_loc": 0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_cost_usd": 0.0,
+                    "first_activity": "",
+                    "last_activity": "",
+                    "active_days": 0,
+                    "files_edited_count": 0,
+                    "model_usage": {},
+                    "work_types": {},
+                }
+            proj = projects_map[pid]
+            proj["employees"].append({
+                "employee_id": r["employee_id"],
+                "employee_name": r["employee_name"],
+                "team": r["employee_team"],
+                "sessions": r["sessions"],
+                "requests": r["requests"],
+                "ai_loc": r["ai_loc"],
+                "cost_usd": r["estimated_cost_usd"],
+                "active_days": r["active_days"],
+            })
+            proj["total_sessions"] += r["sessions"] or 0
+            proj["total_requests"] += r["requests"] or 0
+            proj["total_ai_loc"] += r["ai_loc"] or 0
+            proj["total_user_loc"] += r["user_loc"] or 0
+            proj["total_input_tokens"] += r["input_tokens"] or 0
+            proj["total_output_tokens"] += r["output_tokens"] or 0
+            proj["total_cost_usd"] += r["estimated_cost_usd"] or 0.0
+            proj["active_days"] = max(proj["active_days"], r["active_days"] or 0)
+            proj["files_edited_count"] += r["files_edited_count"] or 0
+            if r["first_activity"] and (not proj["first_activity"] or r["first_activity"] < proj["first_activity"]):
+                proj["first_activity"] = r["first_activity"]
+            if r["last_activity"] and (not proj["last_activity"] or r["last_activity"] > proj["last_activity"]):
+                proj["last_activity"] = r["last_activity"]
+            # Merge model_usage and work_types
+            for k, v in (json.loads(r["model_usage_json"] or "{}")).items():
+                proj["model_usage"][k] = proj["model_usage"].get(k, 0) + v
+            for k, v in (json.loads(r["work_types_json"] or "{}")).items():
+                proj["work_types"][k] = proj["work_types"].get(k, 0) + v
+
+        result = list(projects_map.values())
+        result.sort(key=lambda p: p["total_cost_usd"], reverse=True)
+        return result
+
+
+def get_project_detail(project_id: str) -> dict[str, Any] | None:
+    """Return detail for one project, including per-employee breakdown."""
+    projects = get_all_projects()
+    for p in projects:
+        if p["project_id"] == project_id:
+            return p
+    return None
+
+
+def update_project_metadata(project_id: str, team: str | None = None, client: str | None = None, billing_code: str | None = None) -> bool:
+    """Admin-update of project metadata (team, client, billing code)."""
+    with db() as conn:
+        existing = conn.execute("SELECT project_id FROM projects WHERE project_id = ?", (project_id,)).fetchone()
+        if not existing:
+            return False
+        updates: list[str] = []
+        params: list[Any] = []
+        if team is not None:
+            updates.append("team = ?")
+            params.append(team)
+        if client is not None:
+            updates.append("client = ?")
+            params.append(client)
+        if billing_code is not None:
+            updates.append("billing_code = ?")
+            params.append(billing_code)
+        if not updates:
+            return True
+        params.append(project_id)
+        conn.execute(f"UPDATE projects SET {', '.join(updates)} WHERE project_id = ?", params)
+        return True
