@@ -1,6 +1,6 @@
 # AIQ Collector
 
-Edge collector that parses your AI coding assistant logs (Claude Code; coming soon: Copilot, Codex, OpenCode) and pushes efficiency metrics to an AIQ mothership server.
+Edge collector that parses your AI coding assistant logs (Claude Code, Codex, OpenCode, Cursor, and Copilot best-effort JSON logs) and pushes efficiency metrics to an AIQ mothership server.
 
 ## Install
 
@@ -83,7 +83,12 @@ api_key = "ak_xxxxx"
 [collector]
 employee_id = "jane-doe"
 interval_hours = 6
+harnesses = "auto"
 claude_dir = "~/.claude/projects"
+codex_dir = "~/.codex"
+opencode_dir = "~/.opencode"
+cursor_dir = "~/.cursor"
+copilot_dir = "~/.config/Code/User/workspaceStorage"
 
 [plan]
 # api | seat | rolling_window | enterprise_rolling_window
@@ -96,10 +101,20 @@ seat_cost_usd = 25
 
 ## Supported AI Tools
 
-- ✅ Claude Code (`~/.claude/projects/` logs)
-- 🚧 GitHub Copilot (coming soon)
-- 🚧 OpenAI Codex CLI (coming soon)
-- 🚧 OpenCode (coming soon)
+- ✅ Claude Code (`~/.claude/projects/` logs; dedicated parser)
+- ✅ OpenAI Codex CLI (`~/.codex`; generic JSON/JSONL parser)
+- ✅ OpenCode (`~/.opencode`; generic JSON/JSONL parser)
+- ✅ Cursor (`~/.cursor`; generic JSON/JSONL parser)
+- ✅ GitHub Copilot / VS Code agent logs (`~/.config/Code/User/workspaceStorage`; generic JSON/JSONL parser)
+
+By default `aiq collect` uses `harnesses = "auto"`, which scans every supported harness directory that exists. To restrict collection:
+
+```bash
+aiq collect --harnesses claude,codex
+aiq config --harnesses claude,opencode --opencode-dir ~/.opencode
+```
+
+The non-Claude parsers are intentionally tolerant because vendors change local log formats often. They look for common `role` / `type` / `content` / `usage` / `tool_calls` fields and normalize them into AIQ's shared session model.
 
 ## Privacy
 

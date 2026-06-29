@@ -1,9 +1,9 @@
 """
 Analyzer — orchestrates parser, rules, and scoring into the final metrics JSON.
 
-Takes a list of :class:`~collector.models.Session` objects (produced by
-:class:`~collector.parser.ClaudeLogParser`) and emits the dashboard-ingest
-JSON structure defined in the collector spec.
+Takes a list of :class:`~collector.models.Session` objects (produced by any
+collector harness parser) and emits the dashboard-ingest JSON structure defined
+in the collector spec.
 
 Stdlib-only.
 """
@@ -60,10 +60,10 @@ class Analyzer:
 
     Usage::
 
-        from .parser import ClaudeLogParser
+        from .harnesses import collect_sessions
         from .analyzer import Analyzer
 
-        sessions = ClaudeLogParser().parse_directory()
+        sessions = collect_sessions("auto")
         metrics = Analyzer().analyze(sessions)
     """
 

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from .collect import collect_metrics, post_to_server, print_summary
+from .harnesses import SUPPORTED_HARNESSES, collect_sessions, discover_available_harnesses
 
 CONFIG_DIR = Path.home() / ".aiq"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
@@ -102,7 +103,12 @@ api_key = "{server.get('api_key', '')}"
 [collector]
 employee_id = "{collector.get('employee_id', '')}"
 interval_hours = {collector.get('interval_hours', DEFAULT_INTERVAL_HOURS)}
+harnesses = "{collector.get('harnesses', 'auto')}"
 claude_dir = "{collector.get('claude_dir', '~/.claude/projects')}"
+codex_dir = "{collector.get('codex_dir', '~/.codex')}"
+opencode_dir = "{collector.get('opencode_dir', '~/.opencode')}"
+cursor_dir = "{collector.get('cursor_dir', '~/.cursor')}"
+copilot_dir = "{collector.get('copilot_dir', '~/.config/Code/User/workspaceStorage')}"
 
 [plan]
 plan_type = "{cfg.get('plan', {}).get('plan_type', '')}"
@@ -130,6 +136,9 @@ def update_config(**kwargs: Any) -> dict[str, dict[str, Any]]:
         cfg["collector"]["employee_id"] = kwargs["employee_id"] or ""
     if kwargs.get("claude_dir") is not None:
         cfg["collector"]["claude_dir"] = kwargs["claude_dir"] or ""
+    for key in ["harnesses", "codex_dir", "opencode_dir", "cursor_dir", "copilot_dir"]:
+        if kwargs.get(key) is not None:
+            cfg["collector"][key] = kwargs[key] or ""
     if kwargs.get("interval_hours") is not None:
         cfg["collector"]["interval_hours"] = kwargs["interval_hours"]
     cfg.setdefault("plan", {})
@@ -179,6 +188,14 @@ def command_collect(args: argparse.Namespace) -> int:
     api_key = args.api_key or cfg.get("server", {}).get("api_key", "")
     employee_id = args.employee_id or cfg.get("collector", {}).get("employee_id", "")
     claude_dir = args.claude_dir or cfg.get("collector", {}).get("claude_dir", "")
+    harnesses = args.harnesses or cfg.get("collector", {}).get("harnesses", "auto")
+    harness_dirs = {
+        "claude": claude_dir,
+        "codex": args.codex_dir or cfg.get("collector", {}).get("codex_dir", ""),
+        "opencode": args.opencode_dir or cfg.get("collector", {}).get("opencode_dir", ""),
+        "cursor": args.cursor_dir or cfg.get("collector", {}).get("cursor_dir", ""),
+        "copilot": args.copilot_dir or cfg.get("collector", {}).get("copilot_dir", ""),
+    }
     interval = args.interval or float(cfg.get("collector", {}).get("interval_hours", DEFAULT_INTERVAL_HOURS) or DEFAULT_INTERVAL_HOURS)
 
     plan_context = dict(cfg.get("plan", {}) or {})
@@ -190,6 +207,8 @@ def command_collect(args: argparse.Namespace) -> int:
     def run_once() -> int:
         metrics = collect_metrics(
             claude_dir=claude_dir,
+            harnesses=harnesses,
+            harness_dirs=harness_dirs,
             employee_id=employee_id,
             period_start=args.period_start,
             period_end=args.period_end,
@@ -266,7 +285,8 @@ def command_register(args: argparse.Namespace) -> int:
 
 def command_config(args: argparse.Namespace) -> int:
     changed = any(v is not None for v in [
-        args.server_url, args.api_key, args.employee_id, args.claude_dir, args.interval_hours,
+        args.server_url, args.api_key, args.employee_id, args.claude_dir, args.harnesses,
+        args.codex_dir, args.opencode_dir, args.cursor_dir, args.copilot_dir, args.interval_hours,
         args.plan_type, args.plan_name, args.rolling_window_usd, args.rolling_window_days, args.seat_cost_usd,
     ])
     cfg = update_config(
@@ -274,6 +294,11 @@ def command_config(args: argparse.Namespace) -> int:
         api_key=args.api_key,
         employee_id=args.employee_id,
         claude_dir=args.claude_dir,
+        harnesses=args.harnesses,
+        codex_dir=args.codex_dir,
+        opencode_dir=args.opencode_dir,
+        cursor_dir=args.cursor_dir,
+        copilot_dir=args.copilot_dir,
         interval_hours=args.interval_hours,
         plan_type=args.plan_type,
         plan_name=args.plan_name,
@@ -290,7 +315,12 @@ def command_config(args: argparse.Namespace) -> int:
     print("[collector]")
     print(f"employee_id = {cfg.get('collector', {}).get('employee_id', '') or '(unset)'}")
     print(f"interval_hours = {cfg.get('collector', {}).get('interval_hours', DEFAULT_INTERVAL_HOURS)}")
+    print(f"harnesses = {cfg.get('collector', {}).get('harnesses', 'auto')}")
     print(f"claude_dir = {cfg.get('collector', {}).get('claude_dir', '~/.claude/projects')}")
+    print(f"codex_dir = {cfg.get('collector', {}).get('codex_dir', '~/.codex')}")
+    print(f"opencode_dir = {cfg.get('collector', {}).get('opencode_dir', '~/.opencode')}")
+    print(f"cursor_dir = {cfg.get('collector', {}).get('cursor_dir', '~/.cursor')}")
+    print(f"copilot_dir = {cfg.get('collector', {}).get('copilot_dir', '~/.config/Code/User/workspaceStorage')}")
     plan = cfg.get('plan', {}) or {}
     print("[plan]")
     print(f"plan_type = {plan.get('plan_type', '') or '(unset)'}")
@@ -307,10 +337,17 @@ def command_status(args: argparse.Namespace) -> int:
     cfg = read_config()
     state = load_state()
     server_url = args.server_url or cfg.get("server", {}).get("url", "")
-    claude_dir = Path(os.path.expanduser(cfg.get("collector", {}).get("claude_dir", "~/.claude/projects")))
-    from .parser import ClaudeLogParser
-
-    sessions = ClaudeLogParser(claude_dir=claude_dir).parse_directory() if claude_dir.exists() else []
+    collector_cfg = cfg.get("collector", {})
+    harnesses = args.harnesses or collector_cfg.get("harnesses", "auto")
+    harness_dirs = {
+        "claude": collector_cfg.get("claude_dir", ""),
+        "codex": collector_cfg.get("codex_dir", ""),
+        "opencode": collector_cfg.get("opencode_dir", ""),
+        "cursor": collector_cfg.get("cursor_dir", ""),
+        "copilot": collector_cfg.get("copilot_dir", ""),
+    }
+    availability = discover_available_harnesses(harness_dirs)
+    sessions = collect_sessions(harnesses, dirs=harness_dirs)
     ok, msg = ping_server(server_url)
 
     print("AIQ Collector Status")
@@ -319,7 +356,10 @@ def command_status(args: argparse.Namespace) -> int:
     print(f"Employee ID       : {cfg.get('collector', {}).get('employee_id', '') or '(unset)'}")
     print(f"Server URL        : {server_url or '(unset)'}")
     print(f"API key           : {'set' if cfg.get('server', {}).get('api_key') else '(unset)'}")
-    print(f"Claude logs       : {claude_dir} ({'exists' if claude_dir.exists() else 'missing'})")
+    print(f"Harnesses         : {harnesses}")
+    for name in SUPPORTED_HARNESSES:
+        info = availability[name]
+        print(f"  {name:<8} logs  : {info['path']} ({'exists' if info['exists'] else 'missing'})")
     print(f"Sessions found    : {len(sessions)}")
     print(f"Requests found    : {sum(s.request_count for s in sessions)}")
     print(f"Server connection : {'ok' if ok else 'failed'}")
@@ -556,6 +596,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_collect.add_argument("--api-key", default="", help="API key for X-API-Key header")
     p_collect.add_argument("--output-file", default="", help="Write metrics JSON locally")
     p_collect.add_argument("--claude-dir", default="", help="Override Claude projects directory")
+    p_collect.add_argument("--harnesses", default="", help="Comma-separated harnesses: auto, claude, codex, opencode, cursor, copilot")
+    p_collect.add_argument("--codex-dir", default="", help="Override Codex log directory")
+    p_collect.add_argument("--opencode-dir", default="", help="Override OpenCode log directory")
+    p_collect.add_argument("--cursor-dir", default="", help="Override Cursor log directory")
+    p_collect.add_argument("--copilot-dir", default="", help="Override Copilot/VS Code workspaceStorage directory")
     p_collect.add_argument("--period-start", default="", help="Override period start date (YYYY-MM-DD)")
     p_collect.add_argument("--period-end", default="", help="Override period end date (YYYY-MM-DD)")
     p_collect.add_argument("--daemon", action="store_true", help="Run forever and collect every interval")
@@ -581,6 +626,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--api-key", default=None, help="Set API key")
     p_config.add_argument("--employee-id", default=None, help="Set employee ID")
     p_config.add_argument("--claude-dir", default=None, help="Set Claude projects directory")
+    p_config.add_argument("--harnesses", default=None, help="Set harnesses: auto or comma-separated supported harnesses")
+    p_config.add_argument("--codex-dir", default=None, help="Set Codex log directory")
+    p_config.add_argument("--opencode-dir", default=None, help="Set OpenCode log directory")
+    p_config.add_argument("--cursor-dir", default=None, help="Set Cursor log directory")
+    p_config.add_argument("--copilot-dir", default=None, help="Set Copilot/VS Code workspaceStorage directory")
     p_config.add_argument("--interval-hours", type=float, default=None, help="Set daemon interval")
     p_config.add_argument("--plan-type", default=None, help="Set billing plan type: api, seat, rolling_window, enterprise_rolling_window")
     p_config.add_argument("--plan-name", default=None, help="Set human-readable plan name")
@@ -591,6 +641,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser("status", help="Show config, logs, and server health")
     p_status.add_argument("--server-url", default="", help="Override server URL for health check")
+    p_status.add_argument("--harnesses", default="", help="Override harness selection for session count")
     p_status.set_defaults(func=command_status)
 
     p_autostart = sub.add_parser("install-autostart", help="Install/remove OS-native scheduled collection")

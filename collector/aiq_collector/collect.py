@@ -2,7 +2,7 @@
 """
 collect.py — core collection logic for the AIQ edge collector.
 
-Parses Claude Code session logs, runs the analyzer, and either POSTs the
+Parses AI coding assistant session logs, runs the analyzer, and either POSTs the
 result JSON to a dashboard server or writes it to a local file.
 
 This module provides the reusable functions (``collect_metrics``,
@@ -11,7 +11,7 @@ It can also be run standalone::
 
     python3 -m aiq_collector.collect --employee-id "john-doe" --server-url http://localhost:8000
     python3 -m aiq_collector.collect --output-file metrics.json
-    python3 -m aiq_collector.collect --claude-dir /custom/.claude/projects --output-file out.json
+    python3 -m aiq_collector.collect --harnesses claude,codex --output-file out.json
 
 Stdlib-only.
 """
@@ -28,13 +28,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .analyzer import Analyzer
-from .parser import ClaudeLogParser
+from .harnesses import collect_sessions
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="collect",
-        description="Parse Claude Code logs and emit AI-engineering efficiency metrics.",
+        description="Parse AI coding assistant logs and emit AI-engineering efficiency metrics.",
     )
     p.add_argument(
         "--employee-id", default="",
@@ -52,6 +52,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--claude-dir", default="",
         help="Override the Claude projects directory (default: ~/.claude/projects).",
     )
+    p.add_argument("--harnesses", default="auto", help="Comma-separated harnesses: auto, claude, codex, opencode, cursor, copilot")
+    p.add_argument("--codex-dir", default="", help="Override Codex log directory (default: ~/.codex)")
+    p.add_argument("--opencode-dir", default="", help="Override OpenCode log directory (default: ~/.opencode)")
+    p.add_argument("--cursor-dir", default="", help="Override Cursor log directory (default: ~/.cursor)")
+    p.add_argument("--copilot-dir", default="", help="Override Copilot/VS Code workspaceStorage directory")
     p.add_argument(
         "--period-start", default="",
         help="Override period start date (YYYY-MM-DD). Inferred from logs if omitted.",
@@ -74,15 +79,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def collect_metrics(
     claude_dir: str = "",
+    harnesses: str = "auto",
+    harness_dirs: dict | None = None,
     employee_id: str = "",
     period_start: str = "",
     period_end: str = "",
     plan_context: dict | None = None,
 ) -> dict:
     """Parse logs and run the analyzer. Returns the metrics dict."""
-    claude_path = os.path.expanduser(claude_dir) if claude_dir else os.path.expanduser("~/.claude/projects")
-    parser = ClaudeLogParser(claude_dir=claude_path)
-    sessions = parser.parse_directory()
+    dirs = dict(harness_dirs or {})
+    if claude_dir:
+        dirs["claude"] = os.path.expanduser(claude_dir)
+    sessions = collect_sessions(harnesses, dirs=dirs)
     analyzer = Analyzer()
     return analyzer.analyze(
         sessions,
@@ -189,6 +197,13 @@ def main(argv: list[str] | None = None) -> int:
     }
     metrics = collect_metrics(
         claude_dir=args.claude_dir,
+        harnesses=args.harnesses,
+        harness_dirs={
+            "codex": args.codex_dir,
+            "opencode": args.opencode_dir,
+            "cursor": args.cursor_dir,
+            "copilot": args.copilot_dir,
+        },
         employee_id=args.employee_id,
         period_start=args.period_start,
         period_end=args.period_end,

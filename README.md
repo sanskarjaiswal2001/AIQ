@@ -294,11 +294,19 @@ Triggered anti-patterns map to specific training modules:
 
 | Tool | Status | Log location |
 |------|--------|-------------|
-| Claude Code | ✅ Live | `~/.claude/projects/` |
-| GitHub Copilot (VS Code) | 🚧 Coming soon | VS Code workspace storage |
-| OpenAI Codex CLI | 🚧 Coming soon | `~/.codex/` |
-| OpenCode | 🚧 Coming soon | `~/.opencode/` |
+| Claude Code | ✅ Live, dedicated parser | `~/.claude/projects/` |
+| OpenAI Codex CLI | ✅ Live, generic JSON/JSONL parser | `~/.codex/` |
+| OpenCode | ✅ Live, generic JSON/JSONL parser | `~/.opencode/` |
+| Cursor Agent | ✅ Live, generic JSON/JSONL parser | `~/.cursor/` |
+| GitHub Copilot (VS Code) | ✅ Best-effort generic parser | VS Code workspace storage |
 | Xcode | 🚧 Coming soon | Xcode logs |
+
+Collector defaults to `harnesses = "auto"`, so it scans every supported harness directory that exists on the employee machine. To restrict or override paths:
+
+```bash
+aiq collect --harnesses claude,codex --codex-dir ~/.codex
+aiq config --harnesses claude,opencode --opencode-dir ~/.opencode
+```
 
 ## Privacy
 
@@ -335,6 +343,7 @@ AIQ/
     ├── aiq_collector/      # Python package
     │   ├── cli.py          # `aiq` CLI entry point
     │   ├── parser.py       # Claude Code log parser
+    │   ├── harnesses.py    # Pluggable Codex/OpenCode/Cursor/Copilot parsers
     │   ├── rules.py        # 20 anti-pattern detectors
     │   ├── scoring.py      # Practice scores + cost estimation
     │   └── analyzer.py     # Orchestrates → metrics JSON
@@ -372,6 +381,7 @@ aiq collect --server-url http://localhost:8000 --employee-id test-dev
 ## Roadmap
 
 - [x] Claude Code support
+- [x] Multi-harness collector support: Codex, OpenCode, Cursor, Copilot best-effort JSON/JSONL
 - [x] 20 anti-pattern detectors
 - [x] 5 practice scores with weekly trends
 - [x] Training + plan recommendation engine

@@ -15,7 +15,7 @@ Docker is optional. Native Python works on Linux, WSL, macOS, and Windows.
 |---|---|
 | Mothership | Python 3.11+ recommended, network access between employees and server |
 | Edge collector | Python 3.9+ for the package; Python 3.11+ recommended |
-| Claude Code collector | Claude Code logs at the default `~/.claude/projects` location |
+| AI tool logs | At least one supported harness log directory: Claude `~/.claude/projects`, Codex `~/.codex`, OpenCode `~/.opencode`, Cursor `~/.cursor`, or Copilot/VS Code workspace storage |
 
 Windows users should run commands in **PowerShell**. WSL users should run Linux commands inside the WSL distro.
 
@@ -121,6 +121,15 @@ Collect once:
 ```bash
 aiq collect
 ```
+
+By default, `aiq collect` uses `harnesses = "auto"` and scans every supported harness directory that exists. Restrict or override harnesses when needed:
+
+```bash
+aiq collect --harnesses claude,codex --codex-dir ~/.codex
+aiq config --harnesses claude,opencode --opencode-dir ~/.opencode
+```
+
+Supported harnesses are `claude`, `codex`, `opencode`, `cursor`, and `copilot`. Claude has a dedicated parser; the others use a best-effort JSON/JSONL parser that normalizes common `role` / `content` / `usage` / `tool_calls` fields.
 
 Status:
 

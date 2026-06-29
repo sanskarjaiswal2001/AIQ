@@ -41,6 +41,8 @@ from aiq_collector.scoring import (
     aggregate_model_usage,
 )
 from aiq_collector.analyzer import Analyzer, classify_work_type
+from aiq_collector.collect import collect_metrics
+from aiq_collector.harnesses import GenericJsonAgentParser, HarnessSpec, collect_sessions
 
 
 # ---------------------------------------------------------------------------
@@ -735,6 +737,91 @@ class TestAnalyzer:
 
 
 # ---------------------------------------------------------------------------
+# Multi-harness parser tests
+# ---------------------------------------------------------------------------
+
+class TestMultiHarness:
+    def test_generic_codex_jsonl_parser(self, tmp_path):
+        """Codex-style JSONL records should normalize into Session/Request objects."""
+        codex_dir = tmp_path / "codex"
+        codex_dir.mkdir()
+        log = codex_dir / "session.jsonl"
+        rows = [
+            {"type": "user_message", "content": "Implement billing export", "timestamp": "2026-06-02T10:00:00Z", "cwd": "/repo/aiq", "session_id": "cx1"},
+            {"type": "assistant_message", "content": "I'll edit it.", "model": "gpt-5.1-codex", "usage": {"prompt_tokens": 100, "completion_tokens": 50}, "tool_calls": [
+                {"name": "apply_patch", "arguments": {"file_path": "/repo/aiq/export.py", "new_string": "def export():\n    return True\n"}}
+            ]},
+        ]
+        _write_session_jsonl(log, rows)
+        sessions = GenericJsonAgentParser(HarnessSpec("codex", str(codex_dir), "codex"), codex_dir).parse_directory()
+        assert len(sessions) == 1
+        s = sessions[0]
+        assert s.workspace_id.startswith("codex-")
+        assert s.workspace_name == "aiq"
+        assert s.requests[0].message == "Implement billing export"
+        assert s.requests[0].model == "gpt-5.1-codex"
+        assert s.requests[0].input_tokens == 100
+        assert s.requests[0].output_tokens == 50
+        assert s.requests[0].edited_files == ["/repo/aiq/export.py"]
+        assert s.requests[0].ai_loc == 2
+
+    def test_generic_opencode_json_parser(self, tmp_path):
+        """OpenCode-style JSON with messages array should parse."""
+        opencode_dir = tmp_path / "opencode"
+        opencode_dir.mkdir()
+        log = opencode_dir / "chat.json"
+        log.write_text(json.dumps({
+            "id": "oc1",
+            "workspacePath": "/work/mobile-app",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Fix login bug"}], "createdAt": "2026-06-03T11:00:00Z"},
+                {"role": "assistant", "content": "Fixed it", "model": "qwen3-coder", "token_usage": {"input_tokens": 90, "output_tokens": 45}, "tools": [
+                    {"tool_name": "write_file", "input": {"file_path": "/work/mobile-app/login.ts", "content": "export const ok = true\n"}}
+                ]},
+            ],
+        }), encoding="utf-8")
+        sessions = GenericJsonAgentParser(HarnessSpec("opencode", str(opencode_dir), "opencode"), opencode_dir).parse_directory()
+        assert len(sessions) == 1
+        req = sessions[0].requests[0]
+        assert sessions[0].workspace_id.startswith("opencode-")
+        assert req.message == "Fix login bug"
+        assert req.model == "qwen3-coder"
+        assert req.edited_files == ["/work/mobile-app/login.ts"]
+        assert req.ai_loc == 1
+
+    def test_collect_sessions_multiple_harnesses(self, tmp_path):
+        claude_root = tmp_path / "claude"
+        project_dir = claude_root / "-home-user-web"
+        project_dir.mkdir(parents=True)
+        _write_session_jsonl(project_dir / "c.jsonl", [
+            _make_user_line("Claude prompt", sid="c1"),
+            _make_assistant_line([{"type": "text", "text": "ok"}], sid="c1"),
+        ])
+        codex_root = tmp_path / "codex"
+        codex_root.mkdir()
+        _write_session_jsonl(codex_root / "x.jsonl", [
+            {"type": "user_message", "content": "Codex prompt", "cwd": "/repo/x", "session_id": "x1"},
+            {"type": "assistant_message", "content": "ok", "model": "gpt-5.1-codex"},
+        ])
+        sessions = collect_sessions("claude,codex", dirs={"claude": str(claude_root), "codex": str(codex_root)})
+        assert len(sessions) == 2
+        assert {s.workspace_id.split("-", 1)[0] for s in sessions} == {"claude", "codex"}
+
+    def test_collect_metrics_harnesses_argument(self, tmp_path):
+        codex_root = tmp_path / "codex"
+        codex_root.mkdir()
+        _write_session_jsonl(codex_root / "x.jsonl", [
+            {"type": "user_message", "content": "Add tests", "cwd": "/repo/tests", "session_id": "x1"},
+            {"type": "assistant_message", "content": "```python\ndef test_ok():\n    assert True\n```", "model": "gpt-5.1-codex", "usage": {"prompt_tokens": 30, "completion_tokens": 20}},
+        ])
+        metrics = collect_metrics(harnesses="codex", harness_dirs={"codex": str(codex_root)}, employee_id="multi")
+        assert metrics["employee_id"] == "multi"
+        assert metrics["summary"]["total_sessions"] == 1
+        assert metrics["summary"]["total_requests"] == 1
+        assert "gpt-5.1-codex" in metrics["model_usage"]
+
+
+# ---------------------------------------------------------------------------
 # Real logs test
 # ---------------------------------------------------------------------------
 
@@ -785,7 +872,7 @@ def _run_all_tests():
         TestPathDecoding, TestCodeExtraction, TestParser,
         TestModelTier, TestCostEstimation, TestPracticeScores,
         TestRules, TestWorkTypeClassification, TestAnalyzer,
-        TestRealLogs,
+        TestMultiHarness, TestRealLogs,
     ]
 
     passed = 0
