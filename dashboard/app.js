@@ -2,6 +2,7 @@
 /* Frontend logic: data fetching, rendering, interactions */
 
 const API_BASE = window.location.origin.replace(/\/$/, '');
+const IS_EMPLOYEE_DASHBOARD = window.location.pathname === '/me';
 let currentView = 'overview';
 let allEmployees = [];
 let allRules = [];
@@ -45,6 +46,27 @@ async function apiPost(path, body) {
   return res.json();
 }
 
+async function apiPut(path, body) {
+  const send = async () => {
+    const headers = { 'Content-Type': 'application/json' };
+    const adminKey = localStorage.getItem('aiq_admin_key');
+    if (adminKey) headers['X-Admin-Key'] = adminKey;
+    return fetch(`${API_BASE}${path}`, { method: 'PUT', headers, body: JSON.stringify(body) });
+  };
+  let res = await send();
+  if (res.status === 401) {
+    const key = window.prompt('Mothership admin key required. Paste AIQ_ADMIN_KEY:');
+    if (key) localStorage.setItem('aiq_admin_key', key.trim());
+    res = await send();
+  }
+  if (!res.ok) {
+    let detail = '';
+    try { const j = await res.json(); detail = j.detail ? ` — ${j.detail}` : ''; } catch (_) {}
+    throw new Error(`API PUT ${path} failed: ${res.status}${detail}`);
+  }
+  return res.json();
+}
+
 // ── Score helpers ──────────────────────────────────────
 function scoreClass(score) {
   if (score >= 80) return 'excellent';
@@ -85,6 +107,8 @@ function fmtDate(s) {
 
 // ── View switching ─────────────────────────────────────
 function switchView(view) {
+  if (IS_EMPLOYEE_DASHBOARD && view !== 'me') view = 'me';
+  if (!IS_EMPLOYEE_DASHBOARD && view === 'me') view = 'overview';
   currentView = view;
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
@@ -487,7 +511,7 @@ async function openEmployeeModal(employeeId) {
           <span class="mp-stats">${p.occurrences} occurrences · ${p.severity}</span>
         </div>
         <div class="mp-desc">${esc(p.description || '')}</div>
-        ${p.examples?.length ? `<div class="mp-examples">Examples: ${p.examples.slice(0, 3).map(e => `<code>${esc(e)}</code>`).join(' ')}</div>` : ''}
+        <div class="mp-examples">Examples hidden for privacy. Admins see aggregate counts only.</div>
       </div>
     `).join('') : '<div style="color:var(--text-dim);padding:12px">No anti-patterns detected</div>';
 
@@ -626,22 +650,62 @@ async function renderTraining() {
 async function renderPlans() {
   showLoading(true);
   try {
-    const overview = await api('/api/team/overview');
+    const [overview, catalog, employees] = await Promise.all([
+      api('/api/team/overview'),
+      api('/api/plans'),
+      api('/api/employees'),
+    ]);
+    allEmployees = employees || [];
     const recs = overview.plan_recommendations || [];
+    const plans = catalog.plans || [];
+    const planOptions = plans.map(p => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.billing_mode)} · ${p.price_usd == null ? 'custom' : fmtCost(Number(p.price_usd))}</option>`).join('');
     const container = document.getElementById('plansList');
-    if (!recs.length) {
-      container.innerHTML = emptyState('No plan recommendations yet');
-      return;
-    }
-    container.innerHTML = recs.map(r => `
-      <div class="plan-card">
+    const planRows = allEmployees.map(emp => {
+      const pc = emp.plan_context || {};
+      return `<div class="plan-card plan-config-card">
         <div class="pc-info">
-          <div class="pc-name">${esc(r.employee_id)}</div>
-          <div class="pc-reason">${esc(r.reason)}</div>
+          <div class="pc-name">${esc(emp.name || emp.employee_id)}</div>
+          <div class="pc-reason">Current: ${esc(pc.plan_name || pc.plan_id || pc.plan_type || 'not configured')} · Source: ${esc(emp.plan_config_source || 'unknown')}</div>
+          <div class="pc-reason">Harness inference can identify provider/tool family only. Paid seat, enterprise tier, and rolling-window allowance require confirmation.</div>
+          <div class="filters plan-config-form" data-employee="${esc(emp.employee_id)}">
+            <select class="filter-select plan-id-input"><option value="">Select confirmed plan…</option>${planOptions}</select>
+            <input class="filter-select rolling-window-input" placeholder="Rolling window $ e.g. 25" style="max-width:180px" />
+            <button class="btn btn-secondary save-plan-btn">Save Plan</button>
+          </div>
         </div>
+      </div>`;
+    }).join('');
+    const recHTML = recs.length ? recs.map(r => `
+      <div class="plan-card">
+        <div class="pc-info"><div class="pc-name">${esc(r.employee_id)}</div><div class="pc-reason">${esc(r.reason)}</div></div>
         <span class="plan-badge ${planClass(r.recommendation)}">${esc(r.recommendation)}</span>
       </div>
-    `).join('');
+    `).join('') : emptyState('No plan recommendations yet');
+    container.innerHTML = `
+      <div class="card card-wide"><h3>Employee Plan Configuration</h3><p class="muted-copy">Configure confirmed paid plans here. AIQ can infer provider/tool family from harness/model names, but cannot safely infer enterprise seat tier or rolling-window limits from local logs.</p>${planRows || emptyState('No employees yet')}</div>
+      <div class="card card-wide"><h3>Plan Recommendations</h3>${recHTML}</div>`;
+    container.querySelectorAll('.save-plan-btn').forEach(btn => btn.addEventListener('click', async (e) => {
+      const form = e.target.closest('.plan-config-form');
+      const employeeId = form.dataset.employee;
+      const planId = form.querySelector('.plan-id-input').value;
+      if (!planId) return showToast('Select a plan first');
+      const selected = plans.find(p => p.id === planId) || {};
+      const rolling = Number(form.querySelector('.rolling-window-input').value || selected.price_usd || 0);
+      await apiPut(`/api/employees/${encodeURIComponent(employeeId)}/plan`, {
+        provider: selected.provider,
+        plan_id: selected.id,
+        plan_type: selected.id,
+        plan_name: selected.name,
+        billing_mode: selected.billing_mode,
+        seat_cost_usd: selected.price_usd,
+        rolling_window_usd: rolling || undefined,
+        rolling_window_days: selected.rolling_window_days,
+        rolling_window_hours: selected.rolling_window_hours,
+      });
+      allEmployees = [];
+      showToast('Plan saved');
+      renderPlans();
+    }));
   } catch (e) {
     console.error('Plans error:', e);
     showToast('Failed to load plans: ' + e.message);
@@ -917,21 +981,36 @@ async function openProjectModal(projectId) {
 async function renderRules() {
   showLoading(true);
   try {
-    if (!allRules.length) allRules = await api('/api/rules');
+    allRules = await api('/api/rules');
     const container = document.getElementById('rulesList');
     container.innerHTML = allRules.map(r => `
-      <div class="rule-card">
+      <div class="rule-card ${r.enabled === false ? 'rule-disabled' : ''}">
         <div class="rc-info">
           <h4>${esc(r.name)}</h4>
           <p>${esc(r.description)}</p>
           <div class="rc-suggestion">Suggestion: ${esc(r.suggestion)}</div>
         </div>
-        <div class="rc-meta">
+        <div class="rc-meta rule-controls" data-rule="${esc(r.id)}">
           <span class="rc-group">${esc(r.group)}</span>
           <span class="flag-badge ${severityClass(r.severity)}">${r.severity}</span>
+          <label class="rule-toggle"><input type="checkbox" class="rule-enabled-input" ${r.enabled !== false ? 'checked' : ''}> enabled</label>
+          <select class="filter-select rule-severity-input">
+            ${['high','medium','low'].map(s => `<option value="${s}" ${s === r.severity ? 'selected' : ''}>${s}</option>`).join('')}
+          </select>
+          <button class="btn btn-secondary save-rule-btn">Save</button>
         </div>
       </div>
     `).join('');
+    container.querySelectorAll('.save-rule-btn').forEach(btn => btn.addEventListener('click', async (e) => {
+      const box = e.target.closest('.rule-controls');
+      await apiPut(`/api/rules/${encodeURIComponent(box.dataset.rule)}`, {
+        enabled: box.querySelector('.rule-enabled-input').checked,
+        severity: box.querySelector('.rule-severity-input').value,
+      });
+      allRules = [];
+      showToast('Rule updated');
+      renderRules();
+    }));
   } catch (e) {
     console.error('Rules error:', e);
     showToast('Failed to load rules: ' + e.message);
@@ -976,6 +1055,8 @@ async function renderMe() {
     const costInfo = emp.cost_interpretation || {};
     const planContext = emp.plan_context || {};
     const myProjects = emp.projects || [];
+    const planSource = emp.plan_config_source || 'unknown';
+    const planInference = emp.plan_inference || {};
     const patterns = (emp.anti_patterns || []).filter(p => p.triggered);
     const scoreCards = [
       ['Prompt Quality', scores['prompt-quality']],
@@ -1016,9 +1097,10 @@ async function renderMe() {
         <div class="project-meta-item"><div class="pmi-label">Cost Meaning</div><div class="pmi-value">${esc(costInfo.cost_label || 'Estimated Cost')}</div></div>
         <div class="project-meta-item"><div class="pmi-label">Pressure</div><div class="pmi-value">${esc(costInfo.pressure_level || 'unknown')}</div></div>
         <div class="project-meta-item"><div class="pmi-label">Utilization</div><div class="pmi-value">${costInfo.utilization != null ? `${Math.round((costInfo.utilization || 0) * 100)}%` : '—'}</div></div>
-        <div class="project-meta-item"><div class="pmi-label">Cost Change</div><div class="pmi-value">${planFit.projected_cost_change != null ? fmtCost(planFit.projected_cost_change) : '—'}</div></div>
+        <div class="project-meta-item"><div class="pmi-label">Plan Source</div><div class="pmi-value">${esc(planSource)}</div></div>
       </div>
-      ${planIdentityHTML(planContext, costInfo)}`;
+      ${planIdentityHTML(planContext, costInfo)}
+      <div class="unassigned-note">Detected provider: ${esc(planInference.provider || 'unknown')} (${esc(planInference.confidence || 'none')}). The harness cannot reliably know your paid plan or enterprise rolling-window allowance. Configure locally with <code>aiq config --plan-type &lt;plan_id&gt; --plan-name "&lt;Plan Name&gt;" --rolling-window-usd &lt;amount&gt;</code>, or ask an admin to set it in Mothership → Plan Recommendations.</div>`;
 
     container.innerHTML = `
       <div class="stat-cards">
@@ -1092,6 +1174,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const clean = `${window.location.pathname}${window.location.hash || ''}`;
     window.history.replaceState({}, '', clean);
   }
+
+  // Dashboard split: mothership admin at /, employee-only self dashboard at /me.
+  document.body.classList.toggle('employee-dashboard-mode', IS_EMPLOYEE_DASHBOARD);
+  document.body.classList.toggle('admin-dashboard-mode', !IS_EMPLOYEE_DASHBOARD);
+  document.querySelectorAll('.nav-item').forEach(item => {
+    if (IS_EMPLOYEE_DASHBOARD && item.dataset.view !== 'me') item.remove();
+    if (!IS_EMPLOYEE_DASHBOARD && item.dataset.view === 'me') item.remove();
+  });
+  document.querySelector('.logo-sub').textContent = IS_EMPLOYEE_DASHBOARD ? 'Employee Dashboard' : 'Mothership';
+  document.title = IS_EMPLOYEE_DASHBOARD ? 'AIQ Employee Dashboard' : 'AIQ Mothership Dashboard';
 
   // Nav switching
   document.querySelectorAll('.nav-item').forEach(item => {

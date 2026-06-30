@@ -96,6 +96,8 @@ def training_recommendations(anti_patterns: list[dict[str, Any]]) -> list[dict[s
             priority = entry["priority"]
 
         sev = ap.get("severity") or priority
+        if sev in {"high", "medium", "low"}:
+            priority = sev
         occ = int(ap.get("occurrences", 0) or 0)
 
         key = (track, module)
@@ -142,9 +144,10 @@ def recommend_plan(employee_data: dict[str, Any]) -> dict[str, Any]:
 
     cost = float(summary.get("estimated_cost_usd", 0.0) or 0.0)
     requests = int(summary.get("total_requests", 0) or 0)
-    plan_type = str(plan_context.get("plan_type") or plan_context.get("billing_mode") or "api").lower()
+    plan_type = str(plan_context.get("plan_type") or "api").lower()
+    billing_mode = str(plan_context.get("billing_mode") or "").lower()
     rolling_window_usd = float(plan_context.get("rolling_window_usd", 0.0) or plan_context.get("quota_usd", 0.0) or 0.0)
-    is_rolling = "rolling" in plan_type
+    is_rolling = "rolling" in plan_type or "rolling" in billing_mode
 
     # Overall score: prefer a precomputed value, else average the 5 scores.
     overall_score = employee_data.get("overall_score")
@@ -176,7 +179,10 @@ def recommend_plan(employee_data: dict[str, Any]) -> dict[str, Any]:
         ap.get("rule_id") == "premium-waste" and bool(ap.get("triggered", False)) for ap in anti_patterns
     )
     model_overreliance_triggered = any(
-        ap.get("rule_id") == "model-overreliance" and bool(ap.get("triggered", False)) for ap in anti_patterns
+        ap.get("rule_id") == "model-overreliance"
+        and bool(ap.get("triggered", False))
+        and str(ap.get("severity") or "medium").lower() != "low"
+        for ap in anti_patterns
     )
     rolling_pressure_triggered = any(
         ap.get("rule_id") == "rolling-window-pressure" and bool(ap.get("triggered", False)) for ap in anti_patterns

@@ -195,6 +195,20 @@ CREATE TABLE IF NOT EXISTS project_snapshots (
 CREATE INDEX IF NOT EXISTS idx_proj_snap_project ON project_snapshots(project_id);
 CREATE INDEX IF NOT EXISTS idx_proj_snap_employee ON project_snapshots(employee_id);
 CREATE INDEX IF NOT EXISTS idx_proj_snap_snapshot ON project_snapshots(snapshot_id);
+
+CREATE TABLE IF NOT EXISTS rule_overrides (
+    rule_id TEXT PRIMARY KEY,
+    enabled INTEGER DEFAULT 1,
+    severity TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS employee_plan_overrides (
+    employee_id TEXT PRIMARY KEY,
+    plan_context_json TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (employee_id) REFERENCES employees(id)
+);
 """
 
 
@@ -617,11 +631,74 @@ def get_anti_patterns_for_snapshot(conn: sqlite3.Connection, snapshot_id: int) -
     for r in rows:
         d = _row_to_dict(r)
         d["triggered"] = bool(d["triggered"])
-        if d.get("examples_json") is not None:
-            d["examples"] = json.loads(d["examples_json"])
+        # Privacy boundary: examples can contain raw employee prompts. Store
+        # them for local debugging, but never return them through dashboard APIs.
         del d["examples_json"]
         out.append(d)
     return out
+
+
+def get_rule_overrides() -> dict[str, dict[str, Any]]:
+    """Return admin-configured rule overrides keyed by rule_id."""
+    with db() as conn:
+        rows = conn.execute("SELECT rule_id, enabled, severity, updated_at FROM rule_overrides").fetchall()
+        return {
+            r["rule_id"]: {
+                "enabled": bool(r["enabled"]),
+                "severity": r["severity"],
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        }
+
+
+def set_rule_override(rule_id: str, *, enabled: bool | None = None, severity: str | None = None) -> dict[str, Any]:
+    """Create/update a rule override. severity may be high/medium/low or None."""
+    current = get_rule_overrides().get(rule_id, {"enabled": True, "severity": None})
+    new_enabled = current.get("enabled", True) if enabled is None else bool(enabled)
+    new_severity = current.get("severity") if severity is None else severity
+    if new_severity not in (None, "high", "medium", "low"):
+        raise ValueError("severity must be one of high, medium, low, or null")
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO rule_overrides (rule_id, enabled, severity, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(rule_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                severity = excluded.severity,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (rule_id, 1 if new_enabled else 0, new_severity),
+        )
+    return {"rule_id": rule_id, "enabled": new_enabled, "severity": new_severity}
+
+
+def get_plan_override(employee_id: str) -> dict[str, Any] | None:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT plan_context_json FROM employee_plan_overrides WHERE employee_id = ?",
+            (employee_id,),
+        ).fetchone()
+        return json.loads(row["plan_context_json"]) if row else None
+
+
+def set_plan_override(employee_id: str, plan_context: dict[str, Any]) -> dict[str, Any]:
+    """Set admin-confirmed plan context for an employee."""
+    with db() as conn:
+        if get_employee(conn, employee_id) is None:
+            raise KeyError(employee_id)
+        conn.execute(
+            """
+            INSERT INTO employee_plan_overrides (employee_id, plan_context_json, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(employee_id) DO UPDATE SET
+                plan_context_json = excluded.plan_context_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (employee_id, json.dumps(plan_context)),
+        )
+    return plan_context
 
 
 # ---------------------------------------------------------------------------

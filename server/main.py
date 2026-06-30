@@ -36,6 +36,8 @@ from models import (
 )
 from rules_meta import all_rules
 
+SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -96,6 +98,71 @@ def _slugify_employee_id(name: str | None) -> str:
     base = (name or "employee").strip().lower()
     base = re.sub(r"[^a-z0-9]+", "-", base).strip("-")
     return base or "employee"
+
+
+def _rules_with_overrides() -> list[dict[str, Any]]:
+    """Return rule metadata plus admin enable/severity overrides."""
+    overrides = db.get_rule_overrides()
+    out: list[dict[str, Any]] = []
+    for rule in all_rules():
+        ov = overrides.get(rule["id"], {})
+        rule["default_severity"] = rule.get("severity")
+        rule["enabled"] = ov.get("enabled", True)
+        if ov.get("severity"):
+            rule["severity"] = ov["severity"]
+        rule["effective_severity"] = rule.get("severity")
+        out.append(rule)
+    return out
+
+
+def _infer_plan_context(detail_or_employee: dict[str, Any]) -> dict[str, Any]:
+    """Infer only provider/tool family from model names; paid plan still needs confirmation."""
+    model_usage = detail_or_employee.get("model_usage") or {}
+    models = " ".join(str(m).lower() for m in model_usage.keys())
+    provider = "unknown"
+    if "claude" in models or "opus" in models or "sonnet" in models or "haiku" in models:
+        provider = "claude"
+    elif "gpt" in models or "codex" in models or "openai" in models:
+        provider = "codex"
+    elif "copilot" in models:
+        provider = "copilot"
+    elif "opencode" in models:
+        provider = "opencode"
+    return {
+        "provider": provider,
+        "source": "inferred_from_model_usage" if provider != "unknown" else "not_inferred",
+        "confidence": "tool-family-only" if provider != "unknown" else "none",
+        "requires_confirmation": True,
+        "note": "Agent harness logs can identify provider/tool family, but not the paid enterprise plan, seat tier, or rolling-window allowance. Configure that in the mothership or collector.",
+    }
+
+
+def _apply_rule_policy(anti_patterns: list[dict[str, Any]], plan_context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Apply admin rule overrides, privacy policy, and rolling-window severity policy."""
+    rules_by_id = {r["id"]: r for r in _rules_with_overrides()}
+    pc = plan_context or {}
+    billing = str(pc.get("billing_mode") or pc.get("plan_type") or "").lower()
+    plan_id = str(pc.get("plan_id") or pc.get("plan_type") or "").lower()
+    is_rolling = "rolling" in billing or plan_id.startswith(("claude_", "codex_"))
+    out: list[dict[str, Any]] = []
+    for raw in anti_patterns:
+        ap = dict(raw)
+        ap.pop("examples", None)  # never expose raw prompt examples in dashboard APIs
+        rule = rules_by_id.get(ap.get("rule_id"))
+        if rule:
+            if not rule.get("enabled", True):
+                continue
+            ap.setdefault("rule_name", rule.get("name"))
+            ap.setdefault("rule_group", rule.get("group"))
+            ap["description"] = rule.get("description", "")
+            ap["suggestion"] = rule.get("suggestion", "")
+            ap["severity"] = rule.get("effective_severity") or ap.get("severity")
+        if ap.get("rule_id") == "model-overreliance" and is_rolling:
+            ap["severity"] = "low"
+            ap["description"] = "Single-model usage on a rolling-window seat is usually a routing/coaching signal, not a high-risk cost issue."
+            ap["suggestion"] = "Treat as low-priority unless it coincides with premium waste, poor scores, or high quota pressure."
+        out.append(ap)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -179,14 +246,14 @@ def _employee_detail_payload(employee_id: str) -> dict[str, Any] | None:
     detail = db.get_employee_detail(employee_id)
     if detail is None:
         return None
-    rules_by_id = {r["id"]: r for r in all_rules()}
-    for ap in detail.get("anti_patterns", []):
-        rule = rules_by_id.get(ap.get("rule_id"))
-        if rule:
-            ap.setdefault("rule_name", rule["name"])
-            ap.setdefault("rule_group", rule["group"])
-            ap["description"] = rule.get("description", "")
-            ap["suggestion"] = rule.get("suggestion", "")
+    inferred_plan = _infer_plan_context(detail)
+    stored_plan = detail.get("plan_context") or {}
+    override_plan = db.get_plan_override(employee_id) or {}
+    plan_context = {**inferred_plan, **stored_plan, **override_plan}
+    detail["plan_context"] = plan_context
+    detail["plan_inference"] = inferred_plan
+    detail["plan_config_source"] = "admin_override" if override_plan else ("collector" if stored_plan else "inferred_provider_only")
+    detail["anti_patterns"] = _apply_rule_policy(detail.get("anti_patterns", []), plan_context)
 
     # Add the employee's project membership so /me can explain where their AI work went.
     employee_projects = []
@@ -228,6 +295,14 @@ def _employee_detail_payload(employee_id: str) -> dict[str, Any] | None:
         plan_context = detail.get("plan_context") or {}
         detail["cost_interpretation"] = interpret_cost(summary, plan_context)
         detail["plan_fit"] = analyze_plan_fit(summary, plan_context, overall)
+        from recommendations import recommendations_for_employee
+        detail["recommendations"] = recommendations_for_employee({
+            "summary": summary,
+            "practice_scores": detail.get("practice_scores") or {},
+            "anti_patterns": detail.get("anti_patterns") or [],
+            "plan_context": plan_context,
+            "overall_score": overall,
+        })
     except Exception:
         # Keep employee detail resilient even if the catalog/cost engine is unavailable.
         detail["cost_interpretation"] = {}
@@ -266,6 +341,15 @@ def list_employees(
 ) -> list[dict[str, Any]]:
     """List all employees with their latest snapshot summary."""
     employees = db.list_employees(team=team)
+    for e in employees:
+        # List view does not include full model_usage, so inference happens in detail;
+        # still apply disabled/severity policy to visible flags.
+        plan_override = db.get_plan_override(e.get("employee_id") or "") or {}
+        e["plan_context"] = plan_override
+        e["plan_config_source"] = "admin_override" if plan_override else "not_configured_in_mothership"
+        e["anti_patterns"] = _apply_rule_policy(e.get("anti_patterns") or [], plan_override)
+        e["high_severity_count"] = sum(1 for ap in e["anti_patterns"] if ap.get("severity") == "high" and ap.get("triggered"))
+        e["anti_patterns_count"] = len(e["anti_patterns"])
     return _sort_employees(employees, sort, order)
 
 
@@ -307,11 +391,71 @@ def team_overview() -> dict[str, Any]:
 
 @app.get("/api/rules")
 def rules() -> list[dict[str, Any]]:
-    """Static metadata for all anti-pattern rule metadata."""
-    return all_rules()
+    """Rule metadata plus admin enable/severity overrides."""
+    return _rules_with_overrides()
+
+
+@app.put("/api/rules/{rule_id}")
+def update_rule(
+    rule_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    """Enable/disable a rule or override its severity from the mothership dashboard."""
+    _require_admin(x_admin_key)
+    known = {r["id"] for r in all_rules()}
+    if rule_id not in known:
+        raise HTTPException(status_code=404, detail=f"Unknown rule '{rule_id}'")
+    try:
+        override = db.set_rule_override(
+            rule_id,
+            enabled=body.get("enabled") if "enabled" in body else None,
+            severity=body.get("severity") if "severity" in body else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", **override}
+
+
+@app.get("/api/employees/{employee_id}/plan")
+def employee_plan(employee_id: str) -> dict[str, Any]:
+    """Return plan context from admin override or latest collector payload plus inference note."""
+    detail = _employee_detail_payload(employee_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found")
+    return {
+        "employee_id": employee_id,
+        "plan_context": detail.get("plan_context") or {},
+        "plan_inference": detail.get("plan_inference") or {},
+        "source": detail.get("plan_config_source") or "unknown",
+    }
+
+
+@app.put("/api/employees/{employee_id}/plan")
+def update_employee_plan(
+    employee_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    """Set admin-confirmed plan context for an employee."""
+    _require_admin(x_admin_key)
+    allowed = {
+        "provider", "plan_id", "plan_type", "plan_name", "billing_mode",
+        "seat_cost_usd", "rolling_window_usd", "rolling_window_days",
+        "rolling_window_hours", "included_credits", "api_cost_buffer",
+    }
+    plan_context = {k: v for k, v in body.items() if k in allowed and v not in ("", None)}
+    if not plan_context:
+        raise HTTPException(status_code=400, detail="No plan fields supplied")
+    try:
+        saved = db.set_plan_override(employee_id, plan_context)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found") from exc
+    return {"status": "ok", "employee_id": employee_id, "plan_context": saved}
 
 
 # ---------------------------------------------------------------------------
+
 # Org / Executive / Investor views
 # ---------------------------------------------------------------------------
 
