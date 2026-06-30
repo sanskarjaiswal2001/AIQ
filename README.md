@@ -95,8 +95,9 @@ Goal:
 - Install and run the AIQ mothership natively on localhost.
 - Create a local invite.
 - Install the AIQ collector from the local repo.
-- Register me as a local employee.
-- Run one collection against my local Claude Code logs.
+- Register me with my real display name and team. Do not use placeholder names like "local", "Local User", or "local-user" unless I explicitly ask for that.
+- Configure my AI plan type before collecting, if I tell you what plan I use.
+- Run one collection against all supported local agent harness logs.
 - Show me the local dashboard URL and the /me personal dashboard URL.
 
 Use this flow:
@@ -112,26 +113,34 @@ Use this flow:
    On Windows, use: py scripts\\aiq-mothership.py run --host 127.0.0.1 --port 8000
 5. Wait until health works:
    python scripts/aiq-mothership.py health --server-url http://127.0.0.1:8000
-6. Create an invite:
+6. Identify my display name and team:
+   - If my OS account full name is available, use it as the default display name.
+   - Otherwise ask me for my preferred display name and team.
+   - Create a stable employee ID from that name, such as jane-doe. Do not use local-user.
+7. Create an invite:
    python scripts/aiq-mothership.py create-invite --server-url http://127.0.0.1:8000 --team Local
    Save the invite code from the JSON response.
-7. Install the collector from the local repo:
+8. Install the collector from the local repo:
    cd collector
    python -m pip install -e .
-8. Register me with the invite code:
-   aiq register --server-url http://127.0.0.1:8000 --invite-code <INVITE_CODE> --employee-id local-user --name "Local User" --team Local
-9. Run one collection:
-   aiq collect
-   If Claude Code logs are elsewhere, use: aiq collect --claude-dir <path-to-claude-projects>
-10. Open these URLs:
+9. Register me with the invite code using my real display name:
+   aiq register --server-url http://127.0.0.1:8000 --invite-code <INVITE_CODE> --employee-id <stable-employee-id> --name "<My Real Name>" --team "<My Team>"
+10. If I provide plan details, configure them before collection, for example:
+   aiq config --plan-type claude_team_standard --plan-name "Claude Team Standard" --rolling-window-usd 25 --rolling-window-days 30 --seat-cost-usd 25
+11. Run one collection:
+   aiq collect --harnesses auto
+   If logs are elsewhere, use the matching override such as --claude-dir, --codex-dir, --opencode-dir, --cursor-dir, or --copilot-dir.
+12. Read the API key from `.aiq/config.toml` or `~/.aiq/config.toml` and open these URLs:
    - Management dashboard: http://127.0.0.1:8000
-   - Personal dashboard: http://127.0.0.1:8000/me
+   - Personal dashboard: http://127.0.0.1:8000/me?api_key=<API_KEY>
+   The browser stores the key locally and removes it from the address bar.
 
 Important:
 - Do not send my logs or metrics to any external service.
 - AIQ should only run locally on 127.0.0.1 for this setup.
 - If port 8000 is busy, use another port and update every command consistently.
 - If Python refuses global installs, create/use a virtual environment or use the repo's native installer; do not use sudo pip.
+- After registration, show me the API key location in ~/.aiq/config.toml and verify /me with that exact key.
 - If Docker is not available, continue with native Python; Docker is optional.
 - At the end, report exactly what commands ran, where the repo is cloned, where the AIQ config is stored, and what dashboard URLs I should open.
 ```

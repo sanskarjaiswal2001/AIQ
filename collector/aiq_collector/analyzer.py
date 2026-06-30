@@ -72,6 +72,7 @@ class Analyzer:
         sessions: list[Session],
         *,
         employee_id: str = "",
+        employee_name: str = "",
         period_start: str = "",
         period_end: str = "",
         plan_context: dict[str, Any] | None = None,
@@ -97,6 +98,7 @@ class Analyzer:
 
         return {
             "employee_id": employee_id,
+            "employee_name": employee_name,
             "collected_at": now,
             "period_start": period_start,
             "period_end": period_end,

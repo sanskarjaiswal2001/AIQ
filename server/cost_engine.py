@@ -32,6 +32,24 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_plan_meta(plan_context: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    """Resolve either plan_id or plan_type as a catalog plan ID.
+
+    Early collector configs used ``plan_type`` for billing semantics. Newer
+    setup prompts use catalog IDs such as ``claude_team_standard``. Support
+    both so plan setup is visible and reliable.
+    """
+    plan_id = str(plan_context.get("plan_id") or "")
+    plan_type = str(plan_context.get("plan_type") or "")
+    candidates = [p for p in [plan_id, plan_type] if p]
+    if _HAS_CATALOG:
+        for candidate in candidates:
+            meta = get_plan(candidate)
+            if meta:
+                return candidate, meta
+    return plan_id or plan_type, None
+
+
 def interpret_cost(summary: dict[str, Any], plan_context: dict[str, Any]) -> dict[str, Any]:
     """Interpret raw estimated cost based on the employee's billing plan.
 
@@ -48,7 +66,7 @@ def interpret_cost(summary: dict[str, Any], plan_context: dict[str, Any]) -> dic
     estimated_cost = float(summary.get("estimated_cost_usd", 0.0) or 0.0)
     total_requests = int(summary.get("total_requests", 0) or 0)
 
-    plan_id = str(plan_context.get("plan_id") or "")
+    plan_id, plan_meta = _resolve_plan_meta(plan_context)
     billing_mode = str(plan_context.get("billing_mode") or plan_context.get("plan_type") or "api").lower()
     rolling_window_usd = float(plan_context.get("rolling_window_usd", 0.0) or 0.0)
     rolling_window_hours = int(plan_context.get("rolling_window_hours", 0) or 0)
@@ -56,17 +74,15 @@ def interpret_cost(summary: dict[str, Any], plan_context: dict[str, Any]) -> dic
     seat_cost_usd = float(plan_context.get("seat_cost_usd", 0.0) or 0.0)
     included_credits = float(plan_context.get("included_credits", 0.0) or 0.0)
 
-    # If we have a plan_id, pull billing mode and seat cost from catalog
-    if plan_id and _HAS_CATALOG:
-        plan_meta = get_plan(plan_id)
-        if plan_meta:
-            billing_mode = plan_meta.get("billing_mode", billing_mode)
-            if not seat_cost_usd:
-                seat_cost_usd = float(plan_meta.get("price_usd", 0) or 0)
-            if not rolling_window_days and plan_meta.get("rolling_window_days"):
-                rolling_window_days = int(plan_meta["rolling_window_days"])
-            if not rolling_window_hours and plan_meta.get("rolling_window_hours"):
-                rolling_window_hours = int(plan_meta["rolling_window_hours"])
+    # If we have catalog metadata, pull billing mode and seat cost from catalog.
+    if plan_meta:
+        billing_mode = plan_meta.get("billing_mode", billing_mode)
+        if not seat_cost_usd:
+            seat_cost_usd = float(plan_meta.get("price_usd", 0) or 0)
+        if not rolling_window_days and plan_meta.get("rolling_window_days"):
+            rolling_window_days = int(plan_meta["rolling_window_days"])
+        if not rolling_window_hours and plan_meta.get("rolling_window_hours"):
+            rolling_window_hours = int(plan_meta["rolling_window_hours"])
 
     result: dict[str, Any] = {
         "billing_mode": billing_mode,
@@ -167,8 +183,8 @@ def analyze_plan_fit(summary: dict[str, Any], plan_context: dict[str, Any], over
     utilization = cost_info["utilization"]
     total_requests = int(summary.get("total_requests", 0) or 0)
 
-    plan_id = str(plan_context.get("plan_id") or "")
-    provider = str(plan_context.get("provider") or "")
+    plan_id, plan_meta = _resolve_plan_meta(plan_context)
+    provider = str(plan_context.get("provider") or (plan_meta or {}).get("provider") or "")
 
     # High pressure on rolling window → upgrade
     if pressure in ("high", "critical") and overall_score >= 80:

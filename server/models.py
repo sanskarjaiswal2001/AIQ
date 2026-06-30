@@ -115,6 +115,7 @@ class RegisterResponse(BaseModel):
     employee_id: str
     api_key: str
     key_prefix: str
+    name: str | None = None
     team: str | None = None
 
 

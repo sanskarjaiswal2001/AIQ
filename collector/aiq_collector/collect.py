@@ -82,6 +82,7 @@ def collect_metrics(
     harnesses: str = "auto",
     harness_dirs: dict | None = None,
     employee_id: str = "",
+    employee_name: str = "",
     period_start: str = "",
     period_end: str = "",
     plan_context: dict | None = None,
@@ -95,6 +96,7 @@ def collect_metrics(
     return analyzer.analyze(
         sessions,
         employee_id=employee_id,
+        employee_name=employee_name,
         period_start=period_start,
         period_end=period_end,
         plan_context=plan_context or {},

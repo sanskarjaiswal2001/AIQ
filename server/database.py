@@ -279,7 +279,7 @@ def register_employee_from_invite(
             "INSERT INTO api_keys (employee_id, key_hash, key_prefix) VALUES (?, ?, ?)",
             (employee_id, key_hash, key_prefix),
         )
-    return {"employee_id": employee_id, "api_key": api_key, "key_prefix": key_prefix, "team": effective_team}
+    return {"employee_id": employee_id, "api_key": api_key, "key_prefix": key_prefix, "name": name, "team": effective_team}
 
 
 def create_employee_api_key(employee_id: str) -> dict[str, Any]:

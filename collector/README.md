@@ -22,6 +22,8 @@ pip install -e .
 aiq register --server-url https://aiq.yourcompany.com --invite-code ABC123 --employee-id jane-doe --name "Jane Doe" --team "Engineering"
 ```
 
+Use the employee's real display name and team during registration. Avoid placeholder identities such as `local`, `Local User`, or `local-user`; those names will appear in management and `/me` views.
+
 2. **Collect and push:**
 ```bash
 aiq collect
@@ -82,6 +84,7 @@ api_key = "ak_xxxxx"
 
 [collector]
 employee_id = "jane-doe"
+employee_name = "Jane Doe"
 interval_hours = 6
 harnesses = "auto"
 claude_dir = "~/.claude/projects"
@@ -91,13 +94,16 @@ cursor_dir = "~/.cursor"
 copilot_dir = "~/.config/Code/User/workspaceStorage"
 
 [plan]
-# api | seat | rolling_window | enterprise_rolling_window
-plan_type = "enterprise_rolling_window"
-plan_name = "Claude Team"
+# plan_type accepts either a catalog plan ID, e.g. claude_team_standard,
+# or a legacy billing type such as api / enterprise_rolling_window.
+plan_type = "claude_team_standard"
+plan_name = "Claude Team Standard"
 rolling_window_usd = 25
 rolling_window_days = 30
 seat_cost_usd = 25
 ```
+
+Plan fields are shown in the dashboard so employees and managers can tell whether a number means API spend, fixed seat cost, credits, or rolling-window pressure.
 
 ## Supported AI Tools
 

@@ -31,7 +31,7 @@ from aiq_collector.parser import (
     extract_code_blocks_from_text,
     extract_code_from_tool,
 )
-from aiq_collector.models import Session, SessionRequest, CodeBlock
+from aiq_collector.models import Session, SessionRequest, CodeBlock, ToolUseRecord
 from aiq_collector.rules import run_all_rules, RULE_REGISTRY
 from aiq_collector.scoring import (
     model_tier,
@@ -475,6 +475,48 @@ class TestRules:
         repeated = next(r for r in results if r.rule_id == "repeated-prompts")
         assert not repeated.triggered
         assert repeated.occurrences == 0
+
+    def test_premium_waste_does_not_flag_short_complex_frontier_turns(self):
+        """Short steering on a frontier model can be efficient when context/tools are doing work."""
+        reqs = []
+        for _ in range(12):
+            req = SessionRequest(
+                message="continue",
+                message_length=8,
+                model="claude-opus-4.7",
+                input_tokens=6000,
+                output_tokens=700,
+                edited_files=["app.py"],
+            )
+            req.code_blocks = [CodeBlock(language="python", loc=1)] * 30
+            reqs.append(req)
+        results = run_all_rules([Session(requests=reqs)])
+        waste = next(r for r in results if r.rule_id == "premium-waste")
+        assert not waste.triggered
+        assert waste.occurrences == 0
+
+    def test_premium_waste_still_flags_trivial_chatter(self):
+        reqs = [SessionRequest(message="thanks", message_length=6, model="claude-opus-4.7") for _ in range(12)]
+        results = run_all_rules([Session(requests=reqs)])
+        waste = next(r for r in results if r.rule_id == "premium-waste")
+        assert waste.triggered
+        assert waste.occurrences == 12
+
+    def test_premium_lookup_does_not_flag_contextual_debugging(self):
+        reqs = []
+        for _ in range(12):
+            req = SessionRequest(
+                message="why does auth fail? debug server/main.py",
+                message_length=40,
+                model="gpt-5.2",
+                referenced_files=["server/main.py"],
+            )
+            req.tools_used = [ToolUseRecord(name="Read"), ToolUseRecord(name="Bash")]
+            reqs.append(req)
+        results = run_all_rules([Session(requests=reqs)])
+        lookup = next(r for r in results if r.rule_id == "premium-for-lookup-questions")
+        assert not lookup.triggered
+        assert lookup.occurrences == 0
 
     def test_mega_sessions_triggers(self):
         s = Session(requests=[SessionRequest() for _ in range(55)])

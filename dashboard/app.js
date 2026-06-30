@@ -214,6 +214,35 @@ function planClass(rec) {
   return 'review';
 }
 
+function billingModeLabel(mode) {
+  const labels = {
+    api: 'API usage billing',
+    seat_fixed: 'Fixed seat plan',
+    seat_credits: 'Seat credits plan',
+    seat_rolling: 'Rolling window seat',
+    seat_hybrid: 'Seat + API overage',
+    enterprise_rolling_window: 'Enterprise rolling window',
+    rolling_window: 'Rolling window seat',
+  };
+  return labels[mode] || mode || 'Plan not configured';
+}
+
+function planIdentityHTML(planContext = {}, costInfo = {}) {
+  const planId = planContext.plan_id || planContext.plan_type || 'not configured';
+  const planName = planContext.plan_name || planId;
+  const billingMode = costInfo.billing_mode || planContext.billing_mode || planContext.plan_type || '';
+  const rolling = planContext.rolling_window_usd ? `${fmtCost(Number(planContext.rolling_window_usd))} / ${planContext.rolling_window_days || '?'}d window` : '—';
+  return `
+    <div class="project-meta-grid plan-meta-grid">
+      <div class="project-meta-item"><div class="pmi-label">Plan</div><div class="pmi-value">${esc(planName)}</div></div>
+      <div class="project-meta-item"><div class="pmi-label">Plan ID</div><div class="pmi-value">${esc(planId)}</div></div>
+      <div class="project-meta-item"><div class="pmi-label">Billing Mode</div><div class="pmi-value">${esc(billingModeLabel(billingMode))}</div></div>
+      <div class="project-meta-item"><div class="pmi-label">Seat Cost</div><div class="pmi-value">${planContext.seat_cost_usd ? fmtCost(Number(planContext.seat_cost_usd)) : '—'}</div></div>
+      <div class="project-meta-item"><div class="pmi-label">Rolling Window</div><div class="pmi-value">${esc(rolling)}</div></div>
+      <div class="project-meta-item"><div class="pmi-label">Usage Meaning</div><div class="pmi-value">${esc(costInfo.cost_label || 'Estimated token cost')}</div></div>
+    </div>`;
+}
+
 // ── Executive View ─────────────────────────────────────
 async function renderExecutive() {
   showLoading(true);
@@ -932,6 +961,7 @@ async function renderMe() {
     const plan = recs.plan || {};
     const planFit = emp.plan_fit || {};
     const costInfo = emp.cost_interpretation || {};
+    const planContext = emp.plan_context || {};
     const myProjects = emp.projects || [];
     const patterns = (emp.anti_patterns || []).filter(p => p.triggered);
     const scoreCards = [
@@ -974,10 +1004,12 @@ async function renderMe() {
         <div class="project-meta-item"><div class="pmi-label">Pressure</div><div class="pmi-value">${esc(costInfo.pressure_level || 'unknown')}</div></div>
         <div class="project-meta-item"><div class="pmi-label">Utilization</div><div class="pmi-value">${costInfo.utilization != null ? `${Math.round((costInfo.utilization || 0) * 100)}%` : '—'}</div></div>
         <div class="project-meta-item"><div class="pmi-label">Cost Change</div><div class="pmi-value">${planFit.projected_cost_change != null ? fmtCost(planFit.projected_cost_change) : '—'}</div></div>
-      </div>`;
+      </div>
+      ${planIdentityHTML(planContext, costInfo)}`;
 
     container.innerHTML = `
       <div class="stat-cards">
+        ${statCard('Employee', esc(emp.name || emp.employee_id || 'You'), esc(emp.team || 'team not set'))}
         ${statCard('Requests', fmtNum(summary.total_requests), 'AI interactions')}
         ${statCard('Sessions', fmtNum(summary.total_sessions), 'logged sessions')}
         ${statCard('AI Cost', fmtCost(summary.estimated_cost_usd), 'estimated')}
@@ -1020,7 +1052,7 @@ function showLoading(show) {
 
 function showToast(msg) {
   const t = document.createElement('div');
-  t.style.cssText = 'position:fixed;bottom:20px;right:20px;background:var(--bg-card);border:1px solid var(--red);border-radius:8px;padding:14px 20px;z-index:2000;font-size:13px;max-width:400px';
+  t.style.cssText = 'position:fixed;bottom:20px;right:20px;background:var(--surface);border:1px solid var(--red);border-radius:8px;padding:14px 20px;z-index:2000;font-size:13px;max-width:400px';
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 5000);
@@ -1040,6 +1072,14 @@ async function checkServerStatus() {
 
 // ── Init ───────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  const params = new URLSearchParams(window.location.search);
+  const keyFromUrl = params.get('api_key') || params.get('key');
+  if (keyFromUrl && keyFromUrl.startsWith('ak_')) {
+    localStorage.setItem('aiq_api_key', keyFromUrl);
+    const clean = `${window.location.pathname}${window.location.hash || ''}`;
+    window.history.replaceState({}, '', clean);
+  }
+
   // Nav switching
   document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', () => switchView(item.dataset.view));

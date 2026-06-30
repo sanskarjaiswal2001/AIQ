@@ -112,6 +112,49 @@ def _cap_examples(items: list[str], limit: int = 5) -> list[str]:
     return out
 
 
+_TRIVIAL_PROMPT_RE = re.compile(
+    r"^\s*(hi|hello|hey|ok|okay|thanks?|ty|yes|no|cool|nice|great|"
+    r"continue|go on|again|retry|fix it|do it|what now|status|summari[sz]e)\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+_COMPLEX_WORK_RE = re.compile(
+    r"\b(refactor|debug|fix|implement|build|design|architect|review|test|tests?|"
+    r"deploy|migrate|optimi[sz]e|performance|security|schema|database|api|"
+    r"frontend|backend|collector|dashboard|integration|agent|subagent|plan|"
+    r"phase|root cause|investigate|verify|benchmark)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_wasteful_premium_turn(req: SessionRequest) -> bool:
+    """Return true only for genuinely trivial premium-model turns.
+
+    Short prompts are not automatically waste. Users often use "continue" or
+    a short steering message inside a rich existing context, and frontier
+    models can solve complex tasks with fewer follow-up turns/tokens than a
+    smaller model. Only count a turn when there is no evidence of useful work,
+    context, tools, skills, files, or complex intent.
+    """
+    msg = (req.message or "").strip()
+    if not msg:
+        return False
+    if req.ai_loc > 0 or req.tool_count > 0:
+        return False
+    if req.referenced_files or req.edited_files or req.has_skills or req.skills_used:
+        return False
+    if req.has_mcp or req.has_subagents or req.is_agent_mode or req.is_plan_mode:
+        return False
+    total_tokens = req.input_tokens + req.output_tokens + req.cache_read_tokens + req.cache_write_tokens
+    if total_tokens >= 2500:
+        return False
+    if req.message_length >= 80:
+        return False
+    if _COMPLEX_WORK_RE.search(msg):
+        return False
+    return bool(_TRIVIAL_PROMPT_RE.search(msg)) or req.message_length < 20
+
+
 # ===========================================================================
 # Rules — prompt quality
 # ===========================================================================
@@ -426,8 +469,12 @@ def rule_copy_paste_blindness(sessions: list[Session]) -> DetectionResult:
 
 @register("premium-waste")
 def rule_premium_waste(sessions: list[Session]) -> DetectionResult:
-    """Simple requests (messageLength < 50, no AI code output) using premium
-    models. 10+ occurrences. Premium = modelTier >= 1."""
+    """Genuinely trivial requests using premium models.
+
+    Premium/frontier usage is not waste when it handles complex work, uses
+    tools/files/skills, produces code, or saves context/prompting. This rule
+    only counts isolated low-context turns such as greetings/status/thanks.
+    """
     from .scoring import model_tier
 
     res = DetectionResult(
@@ -435,8 +482,8 @@ def rule_premium_waste(sessions: list[Session]) -> DetectionResult:
         name="Premium Model Waste",
         group="tool-mastery",
         severity="medium",
-        description="Premium models are used for simple requests that produce no code.",
-        suggestion="Route trivial requests to a cheaper/free model tier.",
+        description="Premium models are used for isolated trivial requests with no useful work signals.",
+        suggestion="Use a cheaper model only for true low-context chatter/status turns; keep frontier models for complex or high-leverage work.",
     )
     occurrences = 0
     examples: list[str] = []
@@ -446,7 +493,7 @@ def rule_premium_waste(sessions: list[Session]) -> DetectionResult:
         model = r.model
         if not model or model == "<synthetic>":
             continue
-        if model_tier(model) >= 1 and r.message_length < 50 and r.ai_loc == 0:
+        if model_tier(model) >= 1 and _looks_like_wasteful_premium_turn(r):
             occurrences += 1
             if len(examples) < 5:
                 examples.append(f"[{model}] {r.message[:60]}")
@@ -460,7 +507,7 @@ def rule_premium_waste(sessions: list[Session]) -> DetectionResult:
 @register("premium-for-lookup-questions")
 def rule_premium_for_lookups(sessions: list[Session]) -> DetectionResult:
     """Lookup-style questions using premium models, messageLength < 120, no
-    code, no tools. Ratio > 0.1 AND count > 10."""
+    code, no tools/context. Ratio > 0.15 AND count > 10."""
     from .scoring import model_tier
 
     res = DetectionResult(
@@ -468,8 +515,8 @@ def rule_premium_for_lookups(sessions: list[Session]) -> DetectionResult:
         name="Premium Model For Lookup Questions",
         group="tool-mastery",
         severity="medium",
-        description="Premium models answer simple lookup questions that need no code or tools.",
-        suggestion="Use a cheaper model for factual/lookup questions.",
+        description="Premium models answer simple lookup questions that need no code, tools, files, skills, or deep context.",
+        suggestion="Route pure factual lookups to a cheaper model; do not penalize frontier models used for implementation/debugging context.",
     )
     occurrences = 0
     total = 0
@@ -483,8 +530,7 @@ def rule_premium_for_lookups(sessions: list[Session]) -> DetectionResult:
             continue
         is_lookup = bool(_LOOKUP_QUESTION_RE.search(r.message))
         if (model_tier(model) >= 1 and is_lookup
-                and r.message_length < 120 and r.ai_loc == 0
-                and r.tool_count == 0):
+                and _looks_like_wasteful_premium_turn(r)):
             occurrences += 1
             if len(examples) < 5:
                 examples.append(f"[{model}] {r.message[:60]}")
@@ -493,7 +539,7 @@ def rule_premium_for_lookups(sessions: list[Session]) -> DetectionResult:
     if total == 0:
         return res
     ratio = occurrences / total
-    res.triggered = ratio > 0.1 and occurrences > 10
+    res.triggered = ratio > 0.15 and occurrences > 10
     res.examples = _cap_examples(examples)
     return res
 

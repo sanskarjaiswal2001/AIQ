@@ -102,6 +102,7 @@ api_key = "{server.get('api_key', '')}"
 
 [collector]
 employee_id = "{collector.get('employee_id', '')}"
+employee_name = "{collector.get('employee_name', '')}"
 interval_hours = {collector.get('interval_hours', DEFAULT_INTERVAL_HOURS)}
 harnesses = "{collector.get('harnesses', 'auto')}"
 claude_dir = "{collector.get('claude_dir', '~/.claude/projects')}"
@@ -134,6 +135,8 @@ def update_config(**kwargs: Any) -> dict[str, dict[str, Any]]:
         cfg["server"]["api_key"] = kwargs["api_key"] or ""
     if kwargs.get("employee_id") is not None:
         cfg["collector"]["employee_id"] = kwargs["employee_id"] or ""
+    if kwargs.get("employee_name") is not None:
+        cfg["collector"]["employee_name"] = kwargs["employee_name"] or ""
     if kwargs.get("claude_dir") is not None:
         cfg["collector"]["claude_dir"] = kwargs["claude_dir"] or ""
     for key in ["harnesses", "codex_dir", "opencode_dir", "cursor_dir", "copilot_dir"]:
@@ -187,6 +190,7 @@ def command_collect(args: argparse.Namespace) -> int:
     server_url = args.server_url or cfg.get("server", {}).get("url", "")
     api_key = args.api_key or cfg.get("server", {}).get("api_key", "")
     employee_id = args.employee_id or cfg.get("collector", {}).get("employee_id", "")
+    employee_name = cfg.get("collector", {}).get("employee_name", "")
     claude_dir = args.claude_dir or cfg.get("collector", {}).get("claude_dir", "")
     harnesses = args.harnesses or cfg.get("collector", {}).get("harnesses", "auto")
     harness_dirs = {
@@ -210,6 +214,7 @@ def command_collect(args: argparse.Namespace) -> int:
             harnesses=harnesses,
             harness_dirs=harness_dirs,
             employee_id=employee_id,
+            employee_name=employee_name,
             period_start=args.period_start,
             period_end=args.period_end,
             plan_context=plan_context,
@@ -274,18 +279,20 @@ def command_register(args: argparse.Namespace) -> int:
 
     api_key = data.get("api_key") or data.get("key") or ""
     employee_id = data.get("employee_id") or args.employee_id or ""
+    employee_name = data.get("name") or args.name or ""
     if not api_key or not employee_id:
         print(f"Registration response missing api_key/employee_id: {data}", file=sys.stderr)
         return 1
 
-    update_config(server_url=args.server_url, api_key=api_key, employee_id=employee_id)
-    print(f"Registered employee {employee_id}. Config saved to {CONFIG_PATH}")
+    update_config(server_url=args.server_url, api_key=api_key, employee_id=employee_id, employee_name=employee_name)
+    who = f"{employee_name} ({employee_id})" if employee_name else employee_id
+    print(f"Registered employee {who}. Config saved to {CONFIG_PATH}")
     return 0
 
 
 def command_config(args: argparse.Namespace) -> int:
     changed = any(v is not None for v in [
-        args.server_url, args.api_key, args.employee_id, args.claude_dir, args.harnesses,
+        args.server_url, args.api_key, args.employee_id, args.employee_name, args.claude_dir, args.harnesses,
         args.codex_dir, args.opencode_dir, args.cursor_dir, args.copilot_dir, args.interval_hours,
         args.plan_type, args.plan_name, args.rolling_window_usd, args.rolling_window_days, args.seat_cost_usd,
     ])
@@ -293,6 +300,7 @@ def command_config(args: argparse.Namespace) -> int:
         server_url=args.server_url,
         api_key=args.api_key,
         employee_id=args.employee_id,
+        employee_name=args.employee_name,
         claude_dir=args.claude_dir,
         harnesses=args.harnesses,
         codex_dir=args.codex_dir,
@@ -314,6 +322,7 @@ def command_config(args: argparse.Namespace) -> int:
     print(f"api_key = {'set (' + key[:8] + '…)' if key else '(unset)'}")
     print("[collector]")
     print(f"employee_id = {cfg.get('collector', {}).get('employee_id', '') or '(unset)'}")
+    print(f"employee_name = {cfg.get('collector', {}).get('employee_name', '') or '(unset)'}")
     print(f"interval_hours = {cfg.get('collector', {}).get('interval_hours', DEFAULT_INTERVAL_HOURS)}")
     print(f"harnesses = {cfg.get('collector', {}).get('harnesses', 'auto')}")
     print(f"claude_dir = {cfg.get('collector', {}).get('claude_dir', '~/.claude/projects')}")
@@ -354,6 +363,7 @@ def command_status(args: argparse.Namespace) -> int:
     print("====================")
     print(f"Config file       : {CONFIG_PATH} ({'exists' if CONFIG_PATH.exists() else 'missing'})")
     print(f"Employee ID       : {cfg.get('collector', {}).get('employee_id', '') or '(unset)'}")
+    print(f"Employee name     : {cfg.get('collector', {}).get('employee_name', '') or '(unset)'}")
     print(f"Server URL        : {server_url or '(unset)'}")
     print(f"API key           : {'set' if cfg.get('server', {}).get('api_key') else '(unset)'}")
     print(f"Harnesses         : {harnesses}")
@@ -625,6 +635,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--server-url", default=None, help="Set mothership server URL")
     p_config.add_argument("--api-key", default=None, help="Set API key")
     p_config.add_argument("--employee-id", default=None, help="Set employee ID")
+    p_config.add_argument("--employee-name", default=None, help="Set employee display name")
     p_config.add_argument("--claude-dir", default=None, help="Set Claude projects directory")
     p_config.add_argument("--harnesses", default=None, help="Set harnesses: auto or comma-separated supported harnesses")
     p_config.add_argument("--codex-dir", default=None, help="Set Codex log directory")
