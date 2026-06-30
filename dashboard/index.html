@@ -5,46 +5,55 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI Engineering Efficiency Dashboard</title>
   <link rel="stylesheet" href="styles.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
+  <svg class="svg-sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-overview" viewBox="0 0 24 24"><path d="M4 5h7v7H4zM13 5h7v4h-7zM13 11h7v8h-7zM4 14h7v5H4z"/></symbol>
+    <symbol id="i-executive" viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3M20 16V6"/></symbol>
+    <symbol id="i-employees" viewBox="0 0 24 24"><path d="M16 19v-1a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v1M10 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM20 19v-1a4 4 0 0 0-3-3.87M15 4.13a3 3 0 0 1 0 5.74"/></symbol>
+    <symbol id="i-training" viewBox="0 0 24 24"><path d="M4 6.5 12 3l8 3.5-8 3.5zM6 9v5.5c0 1.7 2.7 3.5 6 3.5s6-1.8 6-3.5V9M20 7v7"/></symbol>
+    <symbol id="i-plans" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></symbol>
+    <symbol id="i-projects" viewBox="0 0 24 24"><path d="M4 7h6l2 3h8v9H4zM4 7v12"/></symbol>
+    <symbol id="i-staffing" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16M7 7h4v4H7zM13 13h4v4h-4z"/></symbol>
+    <symbol id="i-rules" viewBox="0 0 24 24"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-self" viewBox="0 0 24 24"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 20a8 8 0 0 1 16 0"/></symbol>
+  </svg>
   <div id="app">
     <!-- Sidebar -->
     <nav class="sidebar">
       <div class="sidebar-header">
         <div class="logo">
           <span class="logo-icon">AIQ</span>
-          <span class="logo-text">AI Efficiency</span>
+          <span class="logo-copy"><span class="logo-text">AIQ</span><span class="logo-sub">Efficiency OS</span></span>
         </div>
       </div>
       <ul class="nav-items">
         <li class="nav-item active" data-view="overview" aria-label="Team Overview">
-          <span class="nav-icon">TEAM</span> Team Overview
+          <span class="nav-icon"><svg><use href="#i-overview"></use></svg></span><span><span class="nav-label">Team Overview</span><span class="nav-hint">health + usage</span></span>
         </li>
         <li class="nav-item" data-view="executive" aria-label="Executive Overview">
-          <span class="nav-icon">EXEC</span> Executive
+          <span class="nav-icon"><svg><use href="#i-executive"></use></svg></span><span><span class="nav-label">Executive</span><span class="nav-hint">spend + output</span></span>
         </li>
         <li class="nav-item" data-view="employees" aria-label="Employees">
-          <span class="nav-icon">USER</span> Employees
+          <span class="nav-icon"><svg><use href="#i-employees"></use></svg></span><span><span class="nav-label">Employees</span><span class="nav-hint">people detail</span></span>
         </li>
         <li class="nav-item" data-view="training" aria-label="Training Needs">
-          <span class="nav-icon">LEARN</span> Training Needs
+          <span class="nav-icon"><svg><use href="#i-training"></use></svg></span><span><span class="nav-label">Training Needs</span><span class="nav-hint">skill gaps</span></span>
         </li>
         <li class="nav-item" data-view="plans" aria-label="Plan Recommendations">
-          <span class="nav-icon">PLAN</span> Plan Recommendations
+          <span class="nav-icon"><svg><use href="#i-plans"></use></svg></span><span><span class="nav-label">Plan Recommendations</span><span class="nav-hint">billing fit</span></span>
         </li>
         <li class="nav-item" data-view="projects" aria-label="Projects">
-          <span class="nav-icon">PROJ</span> Projects
+          <span class="nav-icon"><svg><use href="#i-projects"></use></svg></span><span><span class="nav-label">Projects</span><span class="nav-hint">cost centers</span></span>
         </li>
         <li class="nav-item" data-view="staffing" aria-label="Staffing Intelligence">
-          <span class="nav-icon">CAP</span> Staffing
+          <span class="nav-icon"><svg><use href="#i-staffing"></use></svg></span><span><span class="nav-label">Staffing</span><span class="nav-hint">capacity watch</span></span>
         </li>
         <li class="nav-item" data-view="rules" aria-label="Anti-Pattern Rules">
-          <span class="nav-icon">RULE</span> Anti-Pattern Rules
+          <span class="nav-icon"><svg><use href="#i-rules"></use></svg></span><span><span class="nav-label">Rules</span><span class="nav-hint">detectors</span></span>
         </li>
         <li class="nav-item" data-view="me" aria-label="My Dashboard">
-          <span class="nav-icon">SELF</span> My Dashboard
+          <span class="nav-icon"><svg><use href="#i-self"></use></svg></span><span><span class="nav-label">My Dashboard</span><span class="nav-hint">self view</span></span>
         </li>
       </ul>
       <div class="sidebar-footer">
@@ -59,7 +68,10 @@
     <main class="main-content">
       <!-- Header -->
       <header class="topbar">
-        <h1 id="pageTitle">Team Overview</h1>
+        <div class="page-heading">
+          <p id="pageKicker">Org command center</p>
+          <h1 id="pageTitle">Team Overview</h1>
+        </div>
         <div class="topbar-actions">
           <button class="btn btn-secondary" id="refreshBtn">
             Refresh

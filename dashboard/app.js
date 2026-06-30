@@ -103,7 +103,20 @@ function switchView(view) {
     rules: 'Anti-Pattern Rules',
     me: 'My Dashboard',
   };
+  const kickers = {
+    overview: 'Org command center',
+    executive: 'Board-safe financial view',
+    employees: 'Individual usage and coaching signals',
+    training: 'Training modules by detected behavior',
+    plans: 'Billing fit and plan pressure',
+    projects: 'Project-level AI cost attribution',
+    staffing: 'Capacity and staffing intelligence',
+    rules: 'Detection logic and coaching rules',
+    me: 'Private employee self-view',
+  };
   document.getElementById('pageTitle').textContent = titles[view] || view;
+  const kicker = document.getElementById('pageKicker');
+  if (kicker) kicker.textContent = kickers[view] || 'AIQ';
   renderView(view);
 }
 
