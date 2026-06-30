@@ -22,7 +22,8 @@ AIQ reads AI coding assistant session logs (Claude Code, Copilot, Codex — see 
 - **20 anti-pattern detectors** — lazy prompting, speed-accepting AI code, premium model waste, runaway agent loops, and more
 - **Training recommendations** — specific modules per employee, prioritized by severity
 - **Plan recommendations** — who should upgrade, who should train first, who should downgrade
-- **Cost tracking** — token usage and estimated spend per employee, per model, per team
+- **Plan-aware cost tracking** — API spend vs seat/rolling-window quota pressure, per employee, model, team, and project
+- **Project and staffing intelligence** — where AI spend goes, who can take more work, who needs training first, and masked exports for client/investor views
 
 Built on the data model from [Microsoft's AI-Engineering-Coach](https://github.com/microsoft/AI-Engineering-Coach).
 
@@ -42,11 +43,13 @@ Built on the data model from [Microsoft's AI-Engineering-Coach](https://github.c
 │  pip install     │     │  Opens dashboard in      │
 │  aiq-collector   │     │  browser → sees:         │
 │  aiq register    │     │  • Team overview         │
-│  aiq collect     │     │  • Employee grid         │
-│  → pushes metrics│     │  • Training needs matrix │
-│    to mothership │     │  • Plan recommendations  │
-│  → sees own data │     │  • Anti-pattern rules    │
-│    at /me        │     │  • Drill-down per person │
+│  aiq collect     │     │  • Executive overview    │
+│  → pushes metrics│     │  • Employee grid         │
+│    to mothership │     │  • Training needs matrix │
+│  → sees own data │     │  • Plan recommendations  │
+│    at /me        │     │  • Projects + staffing   │
+│                  │     │  • Anti-pattern rules    │
+│                  │     │  • Drill-down per person │
 └──────────────────┘     └──────────────────────────┘
 ```
 
@@ -206,7 +209,7 @@ pip install aiq-collector
 aiq register --server-url http://localhost:8000 --invite-code YOUR_CODE --name "Jane Doe" --team "Engineering"
 
 # Optional: tell AIQ how this employee is billed (rolling-window seat vs API spend)
-aiq config --plan-type enterprise_rolling_window --plan-name "Claude Team" --rolling-window-usd 25 --rolling-window-days 30 --seat-cost-usd 25
+aiq config --plan-type claude_team_standard --plan-name "Claude Team Standard" --rolling-window-usd 25 --rolling-window-days 30 --seat-cost-usd 25
 
 # Collect and push (one-time)
 aiq collect
@@ -225,12 +228,15 @@ Employee can view their own dashboard at `http://localhost:8000/me`.
 | View | Who sees it | What it shows |
 |------|-------------|---------------|
 | **Team Overview** | Management | Org-wide stats, score distribution, team breakdown, top training needs, plan recommendations |
+| **Executive Overview** | Management | Project-attributed spend, AI LOC per dollar, team rollups, and masked investor/client-safe exports |
 | **Employees** | Management | Grid of all employees with score rings, practice bars, anti-pattern flags |
 | **Employee Detail** | Management | Per-employee drill-down: scores, anti-patterns, model usage, training + plan recs |
 | **Training Needs** | Management | Matrix of training tracks × employees needing them, with priorities |
 | **Plan Recommendations** | Management | Per-employee: upgrade / train first / maintain / review |
+| **Projects** | Management | Project cards and detail modals with spend, people, work types, model usage, branches, and metadata |
+| **Staffing Intelligence** | Management | High-capacity, train-first, relocatable, overloaded, and project staffing pressure buckets |
 | **Anti-Pattern Rules** | Management | Browser for all 20 detection rules with descriptions |
-| **My Dashboard** | Employee | Personal view — own scores, anti-patterns, training recommendations |
+| **My Dashboard** | Employee | Personal view — own scores, projects, plan/billing context, anti-patterns, and training recommendations |
 
 ## Practice Scores
 
@@ -246,7 +252,7 @@ Five dimensions, each scored 0–100 with weekly trends:
 
 ## Anti-Pattern Detection
 
-20 rules across 5 practice groups. Each rule has severity (high/medium/low), description, and improvement suggestion.
+20 log-derived rules across 5 practice groups, plus one optional plan-aware synthetic rule when plan context is configured. Each rule has severity (high/medium/low), description, and improvement suggestion.
 
 <details>
 <summary><strong>See all 20 rules</strong></summary>
@@ -319,8 +325,9 @@ aiq config --harnesses claude,opencode --opencode-dir ~/.opencode
 
 ## Privacy
 
-- The collector only sends **metrics** — scores, token counts, anti-pattern flags, model usage, work-type classification
-- **Never** sends raw prompts, AI responses, code contents, or file paths
+- The collector sends **derived metrics** — scores, token counts, anti-pattern flags, model usage, work-type classification, project/workspace grouping, and plan context
+- **Never** sends raw prompts, AI responses, or code contents
+- Project/workspace paths may be sent for project grouping and cost attribution. Management views use this internally; investor/client-safe exports mask project names, paths, clients, billing codes, and employee identities.
 - All processing happens locally on the employee's machine
 - The mothership is self-hosted — data never leaves your infrastructure
 
@@ -341,7 +348,9 @@ AIQ/
 │   ├── database.py         # SQLite schema + queries
 │   ├── models.py           # Pydantic models
 │   ├── recommendations.py  # Training + plan recommendation engine
-│   ├── rules_meta.py       # Static rule metadata (20 rules)
+│   ├── rules_meta.py       # Static rule metadata (20 base rules + plan-aware metadata)
+│   ├── plan_catalog.py     # Claude/Codex/Copilot/OpenCode/custom plan catalog
+│   ├── cost_engine.py      # API vs seat/rolling-window cost interpretation
 │   └── requirements.txt
 ├── dashboard/              # Management dashboard (vanilla HTML/CSS/JS)
 │   ├── index.html
@@ -351,12 +360,12 @@ AIQ/
     ├── pyproject.toml
     ├── aiq_collector/      # Python package
     │   ├── cli.py          # `aiq` CLI entry point
-    │   ├── parser.py       # Claude Code log parser
+    │   ├── parser.py       # Dedicated Claude Code log parser
     │   ├── harnesses.py    # Pluggable Codex/OpenCode/Cursor/Copilot parsers
     │   ├── rules.py        # 20 anti-pattern detectors
     │   ├── scoring.py      # Practice scores + cost estimation
     │   └── analyzer.py     # Orchestrates → metrics JSON
-    └── README.md
+    └── test_collector.py   # Collector/parser/analyzer regression tests
 ```
 
 ## Development
@@ -391,7 +400,7 @@ aiq collect --server-url http://localhost:8000 --employee-id test-dev
 
 - [x] Claude Code support
 - [x] Multi-harness collector support: Codex, OpenCode, Cursor, Copilot best-effort JSON/JSONL
-- [x] 20 anti-pattern detectors
+- [x] 20 anti-pattern detectors + plan-aware synthetic rule
 - [x] 5 practice scores with weekly trends
 - [x] Training + plan recommendation engine
 - [x] Management dashboard
@@ -402,8 +411,9 @@ aiq collect --server-url http://localhost:8000 --employee-id test-dev
 - [x] Employee self-registration with invite codes
 - [x] Personal dashboard (`/me`) for employees
 - [x] Collector auto-run (systemd/cron, launchd, Windows Task Scheduler, foreground daemon)
-- [ ] GitHub Copilot support
-- [ ] OpenAI Codex CLI support
+- [x] GitHub Copilot support (best-effort generic parser)
+- [x] OpenAI Codex CLI support (generic JSON/JSONL parser)
+- [ ] Dedicated vendor-specific parsers for non-Claude harnesses as schemas stabilize
 - [ ] Data retention policies
 - [ ] Team management UI
 
