@@ -71,6 +71,7 @@ class IngestRequest(BaseModel):
 
     employee_id: str
     employee_name: str | None = None
+    employee_email: str | None = None
     team: str | None = None
     collected_at: str | None = None
     period_start: str | None = None
@@ -108,6 +109,7 @@ class RegisterRequest(BaseModel):
     invite_code: str
     employee_id: str | None = None
     name: str | None = None
+    email: str | None = None
     team: str | None = None
 
 
@@ -116,6 +118,7 @@ class RegisterResponse(BaseModel):
     api_key: str
     key_prefix: str
     name: str | None = None
+    email: str | None = None
     team: str | None = None
 
 

@@ -78,8 +78,23 @@ SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS employees (
     id TEXT PRIMARY KEY,
     name TEXT,
+    email TEXT,
     team TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS teams (
+    name TEXT PRIMARY KEY,
+    description TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS clients (
+    name TEXT PRIMARY KEY,
+    description TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -216,6 +231,27 @@ def init_db() -> None:
     """Create tables/indexes if they don't already exist."""
     with db() as conn:
         conn.executescript(SCHEMA_SQL)
+        _ensure_column(conn, "employees", "email", "TEXT")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _norm_project_name(name: str | None) -> str:
+    return "".join(ch.lower() if ch.isalnum() else "-" for ch in (name or "").strip()).strip("-")
+
+
+def _maybe_upsert_team(conn: sqlite3.Connection, team: str | None) -> None:
+    if team:
+        conn.execute("INSERT OR IGNORE INTO teams (name) VALUES (?)", (team,))
+
+
+def _maybe_upsert_client(conn: sqlite3.Connection, client: str | None) -> None:
+    if client:
+        conn.execute("INSERT OR IGNORE INTO clients (name) VALUES (?)", (client,))
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +300,7 @@ def register_employee_from_invite(
     *,
     employee_id: str,
     name: str | None = None,
+    email: str | None = None,
     team: str | None = None,
 ) -> dict[str, Any] | None:
     """Consume an invite and create an employee API key.
@@ -284,7 +321,7 @@ def register_employee_from_invite(
         if inv is None or int(inv["uses_remaining"] or 0) <= 0:
             return None
         effective_team = team or inv["team"]
-        upsert_employee(conn, employee_id, name, effective_team)
+        upsert_employee(conn, employee_id, name, effective_team, email=email)
         conn.execute(
             "UPDATE invite_codes SET uses_remaining = uses_remaining - 1 WHERE code = ?",
             (invite_code,),
@@ -293,7 +330,7 @@ def register_employee_from_invite(
             "INSERT INTO api_keys (employee_id, key_hash, key_prefix) VALUES (?, ?, ?)",
             (employee_id, key_hash, key_prefix),
         )
-    return {"employee_id": employee_id, "api_key": api_key, "key_prefix": key_prefix, "name": name, "team": effective_team}
+    return {"employee_id": employee_id, "api_key": api_key, "key_prefix": key_prefix, "name": name, "email": email, "team": effective_team}
 
 
 def create_employee_api_key(employee_id: str) -> dict[str, Any]:
@@ -330,27 +367,46 @@ def verify_api_key(api_key: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def upsert_employee(conn: sqlite3.Connection, employee_id: str, name: str | None, team: str | None) -> None:
-    """Insert employee if missing, or update name/team when provided."""
-    if name is None and team is None:
-        # Ensure the employee exists even without name/team.
+def upsert_employee(conn: sqlite3.Connection, employee_id: str, name: str | None, team: str | None, email: str | None = None) -> None:
+    """Insert employee if missing, or update name/team/email when provided."""
+    if name is None and team is None and email is None:
+        # Ensure the employee exists even without name/team/email.
         conn.execute(
-            "INSERT OR IGNORE INTO employees (id, name, team) VALUES (?, NULL, NULL)",
+            "INSERT OR IGNORE INTO employees (id, name, email, team) VALUES (?, NULL, NULL, NULL)",
             (employee_id,),
         )
         return
 
+    _maybe_upsert_team(conn, team)
+
     # Upsert: insert if missing, otherwise update non-null fields.
     conn.execute(
         """
-        INSERT INTO employees (id, name, team)
-        VALUES (?, ?, ?)
+        INSERT INTO employees (id, name, email, team)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = COALESCE(excluded.name, employees.name),
+            email = COALESCE(excluded.email, employees.email),
             team = COALESCE(excluded.team, employees.team)
         """,
-        (employee_id, name, team),
+        (employee_id, name, email, team),
     )
+
+
+def update_employee_profile(employee_id: str, *, name: str | None = None, email: str | None = None, team: str | None = None) -> bool:
+    with db() as conn:
+        if get_employee(conn, employee_id) is None:
+            return False
+        _maybe_upsert_team(conn, team)
+        conn.execute(
+            """
+            UPDATE employees
+            SET name = COALESCE(?, name), email = COALESCE(?, email), team = COALESCE(?, team)
+            WHERE id = ?
+            """,
+            (name, email, team, employee_id),
+        )
+        return True
 
 
 def get_employee(conn: sqlite3.Connection, employee_id: str) -> dict[str, Any] | None:
@@ -364,12 +420,12 @@ def list_employees(team: str | None = None) -> list[dict[str, Any]]:
         # Latest snapshot id per employee (optionally filtered by team).
         if team:
             emp_rows = conn.execute(
-                "SELECT id, name, team, created_at FROM employees WHERE team = ? ORDER BY id",
+                "SELECT id, name, email, team, created_at FROM employees WHERE team = ? ORDER BY id",
                 (team,),
             ).fetchall()
         else:
             emp_rows = conn.execute(
-                "SELECT id, name, team, created_at FROM employees ORDER BY id"
+                "SELECT id, name, email, team, created_at FROM employees ORDER BY id"
             ).fetchall()
 
         results: list[dict[str, Any]] = []
@@ -444,6 +500,7 @@ def list_employees(team: str | None = None) -> list[dict[str, Any]]:
                 {
                     "employee_id": eid,
                     "name": er["name"],
+                    "email": er["email"],
                     "team": er["team"],
                     "latest_snapshot": latest_snapshot,
                     "period_start": period_start,
@@ -466,6 +523,7 @@ def ingest_snapshot(payload: dict[str, Any]) -> int:
     """Persist a full snapshot and its extracted rows. Returns snapshot id."""
     employee_id = payload["employee_id"]
     name = payload.get("employee_name")
+    email = payload.get("employee_email") or payload.get("email")
     team = payload.get("team")
     period_start = payload.get("period_start")
     period_end = payload.get("period_end")
@@ -503,7 +561,7 @@ def ingest_snapshot(payload: dict[str, Any]) -> int:
     overall = _avg([score_pq, score_sh, score_cr, score_tm, score_cm])
 
     with db() as conn:
-        upsert_employee(conn, employee_id, name, team)
+        upsert_employee(conn, employee_id, name, team, email=email)
 
         cur = conn.execute(
             "INSERT INTO snapshots (employee_id, period_start, period_end, payload_json) "
@@ -560,7 +618,19 @@ def ingest_snapshot(payload: dict[str, Any]) -> int:
         # Store project-level data from the payload
         projects = payload.get("projects") or []
         for proj in projects:
-            pid = proj.get("project_id") or ""
+            # Auto-clump project data from different employee machines.
+            # Different local paths can hash differently, but the same repo/project
+            # folder name should roll up to one mothership project by default.
+            raw_pid = proj.get("project_id") or ""
+            pname = proj.get("project_name") or raw_pid
+            existing_by_name = None
+            norm_name = _norm_project_name(pname)
+            if norm_name:
+                for cand in conn.execute("SELECT project_id, project_name FROM projects").fetchall():
+                    if _norm_project_name(cand["project_name"]) == norm_name:
+                        existing_by_name = cand
+                        break
+            pid = existing_by_name["project_id"] if existing_by_name else raw_pid
             if not pid:
                 continue
             # Upsert project metadata (admin-assignable fields stay if already set)
@@ -570,13 +640,13 @@ def ingest_snapshot(payload: dict[str, Any]) -> int:
             ).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE projects SET project_name = ?, project_path = ? WHERE project_id = ?",
-                    (proj.get("project_name"), proj.get("project_path"), pid),
+                    "UPDATE projects SET project_name = COALESCE(project_name, ?), project_path = COALESCE(project_path, ?) WHERE project_id = ?",
+                    (pname, proj.get("project_path"), pid),
                 )
             else:
                 conn.execute(
                     "INSERT INTO projects (project_id, project_name, project_path) VALUES (?, ?, ?)",
-                    (pid, proj.get("project_name"), proj.get("project_path")),
+                    (pid, pname, proj.get("project_path")),
                 )
 
             conn.execute(
@@ -718,6 +788,7 @@ def get_employee_detail(employee_id: str) -> dict[str, Any] | None:
             return {
                 "employee_id": employee_id,
                 "name": emp["name"],
+                "email": emp["email"],
                 "team": emp["team"],
                 "latest_snapshot": None,
                 "summary": {},
@@ -738,6 +809,7 @@ def get_employee_detail(employee_id: str) -> dict[str, Any] | None:
         detail = {
             "employee_id": employee_id,
             "name": emp["name"],
+            "email": emp["email"],
             "team": emp["team"],
             "latest_snapshot": uploaded_at,
             "period_start": payload.get("period_start"),
@@ -1016,7 +1088,7 @@ def get_all_projects() -> list[dict[str, Any]]:
                    ps.input_tokens, ps.output_tokens, ps.estimated_cost_usd,
                    ps.first_activity, ps.last_activity, ps.active_days,
                    ps.model_usage_json, ps.work_types_json, ps.git_branches_json, ps.files_edited_count,
-                   e.name AS employee_name, e.team AS employee_team
+                   e.name AS employee_name, e.email AS employee_email, e.team AS employee_team
             FROM project_snapshots ps
             JOIN projects p ON p.project_id = ps.project_id
             JOIN employees e ON e.id = ps.employee_id
@@ -1057,6 +1129,7 @@ def get_all_projects() -> list[dict[str, Any]]:
             proj["employees"].append({
                 "employee_id": r["employee_id"],
                 "employee_name": r["employee_name"],
+                "employee_email": r["employee_email"],
                 "team": r["employee_team"],
                 "sessions": r["sessions"],
                 "requests": r["requests"],
@@ -1097,14 +1170,19 @@ def get_project_detail(project_id: str) -> dict[str, Any] | None:
     return None
 
 
-def update_project_metadata(project_id: str, team: str | None = None, client: str | None = None, billing_code: str | None = None) -> bool:
-    """Admin-update of project metadata (team, client, billing code)."""
+def update_project_metadata(project_id: str, team: str | None = None, client: str | None = None, billing_code: str | None = None, project_name: str | None = None) -> bool:
+    """Admin-update of project metadata (name, team, client, billing code)."""
     with db() as conn:
         existing = conn.execute("SELECT project_id FROM projects WHERE project_id = ?", (project_id,)).fetchone()
         if not existing:
             return False
+        _maybe_upsert_team(conn, team)
+        _maybe_upsert_client(conn, client)
         updates: list[str] = []
         params: list[Any] = []
+        if project_name is not None:
+            updates.append("project_name = ?")
+            params.append(project_name)
         if team is not None:
             updates.append("team = ?")
             params.append(team)
@@ -1119,3 +1197,74 @@ def update_project_metadata(project_id: str, team: str | None = None, client: st
         params.append(project_id)
         conn.execute(f"UPDATE projects SET {', '.join(updates)} WHERE project_id = ?", params)
         return True
+
+
+def list_teams() -> list[dict[str, Any]]:
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.name, t.description,
+                   COUNT(DISTINCT e.id) AS employees,
+                   COUNT(DISTINCT p.project_id) AS projects
+            FROM teams t
+            LEFT JOIN employees e ON e.team = t.name
+            LEFT JOIN projects p ON p.team = t.name
+            GROUP BY t.name, t.description
+            UNION
+            SELECT COALESCE(e.team, 'Unassigned') AS name, NULL AS description,
+                   COUNT(DISTINCT e.id) AS employees,
+                   0 AS projects
+            FROM employees e
+            WHERE e.team IS NOT NULL AND e.team NOT IN (SELECT name FROM teams)
+            GROUP BY e.team
+            ORDER BY name
+            """
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
+def upsert_team(name: str, description: str | None = None) -> dict[str, Any]:
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO teams (name, description, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(name) DO UPDATE SET description = COALESCE(excluded.description, teams.description), updated_at = CURRENT_TIMESTAMP
+            """,
+            (name, description),
+        )
+    return {"name": name, "description": description}
+
+
+def list_clients() -> list[dict[str, Any]]:
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.name, c.description, COUNT(DISTINCT p.project_id) AS projects,
+                   COALESCE(SUM(ps.estimated_cost_usd), 0) AS cost_usd
+            FROM clients c
+            LEFT JOIN projects p ON p.client = c.name
+            LEFT JOIN project_snapshots ps ON ps.project_id = p.project_id
+            GROUP BY c.name, c.description
+            UNION
+            SELECT p.client AS name, NULL AS description, COUNT(DISTINCT p.project_id) AS projects,
+                   COALESCE(SUM(ps.estimated_cost_usd), 0) AS cost_usd
+            FROM projects p
+            LEFT JOIN project_snapshots ps ON ps.project_id = p.project_id
+            WHERE p.client IS NOT NULL AND p.client != '' AND p.client NOT IN (SELECT name FROM clients)
+            GROUP BY p.client
+            ORDER BY name
+            """
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
+def upsert_client(name: str, description: str | None = None) -> dict[str, Any]:
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO clients (name, description, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(name) DO UPDATE SET description = COALESCE(excluded.description, clients.description), updated_at = CURRENT_TIMESTAMP
+            """,
+            (name, description),
+        )
+    return {"name": name, "description": description}

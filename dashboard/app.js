@@ -47,11 +47,19 @@ async function apiPost(path, body) {
 }
 
 async function apiPut(path, body) {
+  return apiWrite('PUT', path, body);
+}
+
+async function apiPatch(path, body) {
+  return apiWrite('PATCH', path, body);
+}
+
+async function apiWrite(method, path, body) {
   const send = async () => {
     const headers = { 'Content-Type': 'application/json' };
     const adminKey = localStorage.getItem('aiq_admin_key');
     if (adminKey) headers['X-Admin-Key'] = adminKey;
-    return fetch(`${API_BASE}${path}`, { method: 'PUT', headers, body: JSON.stringify(body) });
+    return fetch(`${API_BASE}${path}`, { method, headers, body: JSON.stringify(body) });
   };
   let res = await send();
   if (res.status === 401) {
@@ -62,7 +70,7 @@ async function apiPut(path, body) {
   if (!res.ok) {
     let detail = '';
     try { const j = await res.json(); detail = j.detail ? ` — ${j.detail}` : ''; } catch (_) {}
-    throw new Error(`API PUT ${path} failed: ${res.status}${detail}`);
+    throw new Error(`API ${method} ${path} failed: ${res.status}${detail}`);
   }
   return res.json();
 }
@@ -481,6 +489,13 @@ async function openEmployeeModal(employeeId) {
     const plan = recommendations.plan || {};
 
     document.getElementById('modalTitle').textContent = emp.name || emp.employee_id;
+    const profileHTML = `
+      <div class="org-edit-grid" data-employee-profile="${esc(emp.employee_id)}">
+        <label>Name<input class="filter-select emp-name-input" value="${esc(emp.name || '')}" placeholder="Display name"></label>
+        <label>Email<input class="filter-select emp-email-input" value="${esc(emp.email || '')}" placeholder="email@company.com"></label>
+        <label>Team<input class="filter-select emp-team-input" value="${esc(emp.team || '')}" placeholder="Team"></label>
+        <button class="btn btn-secondary save-employee-profile">Save Employee</button>
+      </div>`;
 
     const scoreCards = [
       ['Prompt Quality', scores['prompt-quality']],
@@ -545,6 +560,10 @@ async function openEmployeeModal(employeeId) {
 
     body.innerHTML = `
       <div class="modal-section">
+        <h3>Employee Profile</h3>
+        ${profileHTML}
+      </div>
+      <div class="modal-section">
         <h3>Practice Scores</h3>
         <div class="modal-scores">${scoreCards}</div>
       </div>
@@ -572,6 +591,17 @@ async function openEmployeeModal(employeeId) {
         ${planHTML}
       </div>
     `;
+    body.querySelector('.save-employee-profile')?.addEventListener('click', async () => {
+      const box = body.querySelector('[data-employee-profile]');
+      await apiPut(`/api/employees/${encodeURIComponent(emp.employee_id)}`, {
+        name: box.querySelector('.emp-name-input').value.trim(),
+        email: box.querySelector('.emp-email-input').value.trim(),
+        team: box.querySelector('.emp-team-input').value.trim(),
+      });
+      allEmployees = [];
+      showToast('Employee updated');
+      openEmployeeModal(emp.employee_id);
+    });
   } catch (e) {
     console.error('Modal error:', e);
     body.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Failed to load</h3><p>${esc(e.message)}</p></div>`;
@@ -782,19 +812,22 @@ function projectStaffingTable(rows) {
 async function renderProjects() {
   showLoading(true);
   try {
-    const projects = await api('/api/projects');
+    const [projects, directory] = await Promise.all([api('/api/projects'), api('/api/org/directory')]);
     const container = document.getElementById('projectsList');
+    const directoryHTML = orgDirectoryPanel(directory);
     if (!projects || !projects.length) {
-      container.innerHTML = emptyState('No projects yet. Project data will appear here once the collector reports activity grouped by project path.');
+      container.innerHTML = directoryHTML + emptyState('No projects yet. Project data will appear here once the collector reports activity grouped by project path.');
+      attachOrgDirectoryHandlers(container);
       return;
     }
     // Sort by total_cost_usd descending
     projects.sort((a, b) => (b.total_cost_usd || 0) - (a.total_cost_usd || 0));
-    container.innerHTML = projects.map(p => projectCard(p)).join('');
+    container.innerHTML = directoryHTML + projects.map(p => projectCard(p)).join('');
     // Attach click handlers
     container.querySelectorAll('.project-card').forEach(card => {
       card.addEventListener('click', () => openProjectModal(card.dataset.id));
     });
+    attachOrgDirectoryHandlers(container);
   } catch (e) {
     console.error('Projects error:', e);
     showToast('Failed to load projects: ' + e.message);
@@ -802,6 +835,45 @@ async function renderProjects() {
   } finally {
     showLoading(false);
   }
+}
+
+function attachOrgDirectoryHandlers(container) {
+  container.querySelector('.add-team-btn')?.addEventListener('click', async () => {
+    const name = container.querySelector('.new-team-name').value.trim();
+    if (!name) return showToast('Enter a team name');
+    await apiPut(`/api/teams/${encodeURIComponent(name)}`, {});
+    showToast('Team added');
+    renderProjects();
+  });
+  container.querySelector('.add-client-btn')?.addEventListener('click', async () => {
+    const name = container.querySelector('.new-client-name').value.trim();
+    if (!name) return showToast('Enter a client name');
+    await apiPut(`/api/clients/${encodeURIComponent(name)}`, {});
+    showToast('Client added');
+    renderProjects();
+  });
+}
+
+function orgDirectoryPanel(directory) {
+  const teams = directory?.teams || [];
+  const clients = directory?.clients || [];
+  const employees = directory?.employees || [];
+  const teamRows = teams.slice(0, 8).map(t => `<div class="exec-row compact"><span>${esc(t.name)}</span><span>${t.employees || 0} people</span><span>${t.projects || 0} projects</span></div>`).join('');
+  const clientRows = clients.slice(0, 8).map(c => `<div class="exec-row compact"><span>${esc(c.name)}</span><span>${c.projects || 0} projects</span><span>${fmtCost(c.cost_usd || 0)}</span></div>`).join('');
+  return `<div class="card card-wide org-directory-card">
+    <h3>Org Directory</h3>
+    <p class="muted-copy">Mothership keeps employees, teams, projects, and clients optional but editable. Edge collectors keep project membership fresh automatically; admins can correct names, teams, clients, and billing codes here.</p>
+    <div class="stat-cards compact-stats">
+      ${statCard('Employees', employees.length, 'registered')}
+      ${statCard('Teams', teams.length, 'optional')}
+      ${statCard('Clients', clients.length, 'optional')}
+      ${statCard('Projects', (directory?.projects || []).length, 'auto-updated')}
+    </div>
+    <div class="card-grid two-col">
+      <div><h4>Teams</h4><div class="exec-table">${teamRows || emptyRow('No teams yet')}</div><div class="org-edit-grid add-team-form"><input class="filter-select new-team-name" placeholder="New team name"><button class="btn btn-secondary add-team-btn">Add Team</button></div></div>
+      <div><h4>Clients</h4><div class="exec-table">${clientRows || emptyRow('No clients yet')}</div><div class="org-edit-grid add-client-form"><input class="filter-select new-client-name" placeholder="New client name"><button class="btn btn-secondary add-client-btn">Add Client</button></div></div>
+    </div>
+  </div>`;
 }
 
 function projectCard(p) {
@@ -866,6 +938,13 @@ async function openProjectModal(projectId) {
     };
 
     const metaHTML = `
+      <div class="org-edit-grid" data-project-profile="${esc(p.project_id)}">
+        <label>Project Name<input class="filter-select project-name-input" value="${esc(p.project_name || '')}" placeholder="Project name"></label>
+        <label>Team<input class="filter-select project-team-input" value="${esc(team || '')}" placeholder="Owning team"></label>
+        <label>Client<input class="filter-select project-client-input" value="${esc(client || '')}" placeholder="Client / internal org"></label>
+        <label>Billing Code<input class="filter-select project-billing-input" value="${esc(billingCode || '')}" placeholder="Optional"></label>
+        <button class="btn btn-secondary save-project-profile">Save Project</button>
+      </div>
       <div class="project-meta-grid">
         ${metaItem('Team', team)}
         ${metaItem('Client', client)}
@@ -971,6 +1050,18 @@ async function openProjectModal(projectId) {
         ${branchHTML}
       </div>
     `;
+    body.querySelector('.save-project-profile')?.addEventListener('click', async () => {
+      const box = body.querySelector('[data-project-profile]');
+      await apiPatch(`/api/projects/${encodeURIComponent(p.project_id)}`, {
+        project_name: box.querySelector('.project-name-input').value.trim(),
+        team: box.querySelector('.project-team-input').value.trim(),
+        client: box.querySelector('.project-client-input').value.trim(),
+        billing_code: box.querySelector('.project-billing-input').value.trim(),
+      });
+      showToast('Project updated');
+      renderProjects();
+      openProjectModal(p.project_id);
+    });
   } catch (e) {
     console.error('Project modal error:', e);
     body.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Failed to load</h3><p>${esc(e.message)}</p></div>`;

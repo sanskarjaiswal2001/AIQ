@@ -325,6 +325,10 @@ a { color: inherit; }
 .plans-list, .rules-list { display: grid; gap: 12px; }
 .plan-card, .rule-card { padding: 16px; display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
 .plan-config-card { display: block; }
+.org-directory-card { grid-column: 1 / -1; }
+.org-edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; align-items: end; margin: 12px 0; }
+.org-edit-grid label { display: grid; gap: 5px; color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.compact-stats { margin: 12px 0 16px; }
 .rule-disabled { opacity: .55; }
 .rule-controls { min-width: 220px; }
 .rule-toggle { color: var(--text-dim); font-size: 12px; display: inline-flex; gap: 6px; align-items: center; }

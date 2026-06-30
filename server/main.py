@@ -211,6 +211,7 @@ def register(req: RegisterRequest) -> RegisterResponse:
         req.invite_code,
         employee_id=employee_id,
         name=req.name,
+        email=req.email,
         team=req.team,
     )
     if result is None:
@@ -239,6 +240,55 @@ def admin_list_invites(x_admin_key: str | None = Header(default=None, alias="X-A
     """List registration invites. Protected by X-Admin-Key when configured."""
     _require_admin(x_admin_key)
     return db.list_invites()
+
+
+@app.get("/api/org/directory")
+def org_directory() -> dict[str, Any]:
+    """Editable org directory for mothership: employees, teams, clients, projects."""
+    return {
+        "employees": db.list_employees(),
+        "teams": db.list_teams(),
+        "clients": db.list_clients(),
+        "projects": db.get_all_projects(),
+    }
+
+
+@app.put("/api/employees/{employee_id}")
+def update_employee(
+    employee_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    _require_admin(x_admin_key)
+    ok = db.update_employee_profile(
+        employee_id,
+        name=body.get("name"),
+        email=body.get("email"),
+        team=body.get("team"),
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found")
+    return {"status": "ok", "employee_id": employee_id}
+
+
+@app.put("/api/teams/{team_name}")
+def upsert_team(
+    team_name: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    _require_admin(x_admin_key)
+    return {"status": "ok", "team": db.upsert_team(team_name, body.get("description"))}
+
+
+@app.put("/api/clients/{client_name}")
+def upsert_client(
+    client_name: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    _require_admin(x_admin_key)
+    return {"status": "ok", "client": db.upsert_client(client_name, body.get("description"))}
 
 
 def _employee_detail_payload(employee_id: str) -> dict[str, Any] | None:
@@ -755,9 +805,10 @@ def project_detail(project_id: str) -> dict[str, Any]:
 
 @app.patch("/api/projects/{project_id}")
 def update_project(project_id: str, body: dict[str, Any] = Body(...)):
-    """Admin-update project metadata (team, client, billing_code)."""
+    """Admin-update project metadata (name, team, client, billing_code)."""
     ok = db.update_project_metadata(
         project_id,
+        project_name=body.get("project_name"),
         team=body.get("team"),
         client=body.get("client"),
         billing_code=body.get("billing_code"),

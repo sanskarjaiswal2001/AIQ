@@ -13,6 +13,7 @@ Stdlib-only.
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import platform
@@ -103,6 +104,7 @@ api_key = "{server.get('api_key', '')}"
 [collector]
 employee_id = "{collector.get('employee_id', '')}"
 employee_name = "{collector.get('employee_name', '')}"
+employee_email = "{collector.get('employee_email', '')}"
 interval_hours = {collector.get('interval_hours', DEFAULT_INTERVAL_HOURS)}
 harnesses = "{collector.get('harnesses', 'auto')}"
 claude_dir = "{collector.get('claude_dir', '~/.claude/projects')}"
@@ -137,6 +139,8 @@ def update_config(**kwargs: Any) -> dict[str, dict[str, Any]]:
         cfg["collector"]["employee_id"] = kwargs["employee_id"] or ""
     if kwargs.get("employee_name") is not None:
         cfg["collector"]["employee_name"] = kwargs["employee_name"] or ""
+    if kwargs.get("employee_email") is not None:
+        cfg["collector"]["employee_email"] = kwargs["employee_email"] or ""
     if kwargs.get("claude_dir") is not None:
         cfg["collector"]["claude_dir"] = kwargs["claude_dir"] or ""
     for key in ["harnesses", "codex_dir", "opencode_dir", "cursor_dir", "copilot_dir"]:
@@ -150,6 +154,40 @@ def update_config(**kwargs: Any) -> dict[str, dict[str, Any]]:
             cfg["plan"][key] = kwargs[key]
     write_config(cfg)
     return cfg
+
+
+def _git_config(key: str) -> str:
+    try:
+        proc = subprocess.run(["git", "config", "--global", key], capture_output=True, text=True, timeout=3, check=False)
+        return proc.stdout.strip() if proc.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _slugify(value: str) -> str:
+    out = "".join(ch.lower() if ch.isalnum() else "-" for ch in value.strip()).strip("-")
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out or ""
+
+
+def detect_user_identity() -> dict[str, str]:
+    """Best-effort local identity detection for first setup."""
+    git_name = _git_config("user.name")
+    git_email = _git_config("user.email")
+    username = getpass.getuser() or os.environ.get("USER") or os.environ.get("USERNAME") or ""
+    full_name = ""
+    if os.name != "nt":
+        try:
+            import pwd
+            gecos = pwd.getpwuid(os.getuid()).pw_gecos.split(",", 1)[0].strip()
+            if gecos and gecos.lower() not in {"unknown", username.lower()}:
+                full_name = gecos
+        except Exception:
+            pass
+    name = git_name or full_name or username
+    employee_id = _slugify(git_email.split("@", 1)[0] if git_email else name or username)
+    return {"name": name, "email": git_email, "employee_id": employee_id}
 
 
 def save_state(**kwargs: Any) -> None:
@@ -191,6 +229,7 @@ def command_collect(args: argparse.Namespace) -> int:
     api_key = args.api_key or cfg.get("server", {}).get("api_key", "")
     employee_id = args.employee_id or cfg.get("collector", {}).get("employee_id", "")
     employee_name = cfg.get("collector", {}).get("employee_name", "")
+    employee_email = cfg.get("collector", {}).get("employee_email", "")
     claude_dir = args.claude_dir or cfg.get("collector", {}).get("claude_dir", "")
     harnesses = args.harnesses or cfg.get("collector", {}).get("harnesses", "auto")
     harness_dirs = {
@@ -219,6 +258,8 @@ def command_collect(args: argparse.Namespace) -> int:
             period_end=args.period_end,
             plan_context=plan_context,
         )
+        if employee_email:
+            metrics["employee_email"] = employee_email
         if not args.quiet:
             print_summary(metrics)
 
@@ -257,12 +298,22 @@ def command_collect(args: argparse.Namespace) -> int:
 
 
 def command_register(args: argparse.Namespace) -> int:
+    detected = detect_user_identity()
+    name = args.name or detected.get("name") or ""
+    email = args.email or detected.get("email") or ""
+    employee_id = args.employee_id or detected.get("employee_id") or ""
+    if not name or not employee_id:
+        print("Could not infer your employee identity. Re-run with --name and --employee-id.", file=sys.stderr)
+        return 1
+    if not email:
+        print("WARNING: could not infer employee email. Add --email now or set it later in the mothership admin dashboard.", file=sys.stderr)
     endpoint = args.server_url.rstrip("/") + "/api/register"
     payload = {
         "invite_code": args.invite_code,
-        "name": args.name or "",
+        "name": name,
+        "email": email,
         "team": args.team or "",
-        "employee_id": args.employee_id or "",
+        "employee_id": employee_id,
     }
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"}, method="POST")
@@ -278,13 +329,14 @@ def command_register(args: argparse.Namespace) -> int:
         return 1
 
     api_key = data.get("api_key") or data.get("key") or ""
-    employee_id = data.get("employee_id") or args.employee_id or ""
-    employee_name = data.get("name") or args.name or ""
+    employee_id = data.get("employee_id") or employee_id or ""
+    employee_name = data.get("name") or name or ""
+    employee_email = data.get("email") or email or ""
     if not api_key or not employee_id:
         print(f"Registration response missing api_key/employee_id: {data}", file=sys.stderr)
         return 1
 
-    update_config(server_url=args.server_url, api_key=api_key, employee_id=employee_id, employee_name=employee_name)
+    update_config(server_url=args.server_url, api_key=api_key, employee_id=employee_id, employee_name=employee_name, employee_email=employee_email)
     who = f"{employee_name} ({employee_id})" if employee_name else employee_id
     print(f"Registered employee {who}. Config saved to {CONFIG_PATH}")
     return 0
@@ -292,7 +344,7 @@ def command_register(args: argparse.Namespace) -> int:
 
 def command_config(args: argparse.Namespace) -> int:
     changed = any(v is not None for v in [
-        args.server_url, args.api_key, args.employee_id, args.employee_name, args.claude_dir, args.harnesses,
+        args.server_url, args.api_key, args.employee_id, args.employee_name, args.employee_email, args.claude_dir, args.harnesses,
         args.codex_dir, args.opencode_dir, args.cursor_dir, args.copilot_dir, args.interval_hours,
         args.plan_type, args.plan_name, args.rolling_window_usd, args.rolling_window_days, args.seat_cost_usd,
     ])
@@ -301,6 +353,7 @@ def command_config(args: argparse.Namespace) -> int:
         api_key=args.api_key,
         employee_id=args.employee_id,
         employee_name=args.employee_name,
+        employee_email=args.employee_email,
         claude_dir=args.claude_dir,
         harnesses=args.harnesses,
         codex_dir=args.codex_dir,
@@ -323,6 +376,7 @@ def command_config(args: argparse.Namespace) -> int:
     print("[collector]")
     print(f"employee_id = {cfg.get('collector', {}).get('employee_id', '') or '(unset)'}")
     print(f"employee_name = {cfg.get('collector', {}).get('employee_name', '') or '(unset)'}")
+    print(f"employee_email = {cfg.get('collector', {}).get('employee_email', '') or '(unset)'}")
     print(f"interval_hours = {cfg.get('collector', {}).get('interval_hours', DEFAULT_INTERVAL_HOURS)}")
     print(f"harnesses = {cfg.get('collector', {}).get('harnesses', 'auto')}")
     print(f"claude_dir = {cfg.get('collector', {}).get('claude_dir', '~/.claude/projects')}")
@@ -364,6 +418,7 @@ def command_status(args: argparse.Namespace) -> int:
     print(f"Config file       : {CONFIG_PATH} ({'exists' if CONFIG_PATH.exists() else 'missing'})")
     print(f"Employee ID       : {cfg.get('collector', {}).get('employee_id', '') or '(unset)'}")
     print(f"Employee name     : {cfg.get('collector', {}).get('employee_name', '') or '(unset)'}")
+    print(f"Employee email    : {cfg.get('collector', {}).get('employee_email', '') or '(unset)'}")
     print(f"Server URL        : {server_url or '(unset)'}")
     print(f"API key           : {'set' if cfg.get('server', {}).get('api_key') else '(unset)'}")
     print(f"Harnesses         : {harnesses}")
@@ -626,7 +681,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_register = sub.add_parser("register", help="Register with a mothership using an invite code")
     p_register.add_argument("--server-url", required=True, help="Mothership server URL")
     p_register.add_argument("--invite-code", required=True, help="Invite code from admin")
-    p_register.add_argument("--name", default="", help="Employee display name")
+    p_register.add_argument("--name", default="", help="Employee display name; defaults to git/OS identity when available")
+    p_register.add_argument("--email", default="", help="Employee email; defaults to git config user.email when available")
     p_register.add_argument("--team", default="", help="Team name")
     p_register.add_argument("--employee-id", default="", help="Preferred employee ID")
     p_register.set_defaults(func=command_register)
@@ -636,6 +692,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--api-key", default=None, help="Set API key")
     p_config.add_argument("--employee-id", default=None, help="Set employee ID")
     p_config.add_argument("--employee-name", default=None, help="Set employee display name")
+    p_config.add_argument("--employee-email", default=None, help="Set employee email")
     p_config.add_argument("--claude-dir", default=None, help="Set Claude projects directory")
     p_config.add_argument("--harnesses", default=None, help="Set harnesses: auto or comma-separated supported harnesses")
     p_config.add_argument("--codex-dir", default=None, help="Set Codex log directory")
