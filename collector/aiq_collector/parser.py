@@ -73,10 +73,32 @@ def workspace_name_from_path(path: str) -> str:
     """Extract the last path component as the workspace display name."""
     if not path:
         return "unknown"
-    # handle both / and \ separators
+    # handle both / and \\ separators
     parts = re.split(r"[\\/]+", path)
     parts = [p for p in parts if p]
     return parts[-1] if parts else path
+
+
+def workspace_path_from_log_lines(lines: list[dict[str, Any]], encoded_name: str = "") -> str:
+    """Return the best workspace path for a Claude session.
+
+    Claude stores a real ``cwd`` on many log records. Prefer that over the
+    parent directory's encoded name because the encoded form is lossy: hyphens,
+    spaces, path separators, and Windows separators all collapse to ``-``.
+    """
+    keys = ("cwd", "workspace", "workspace_path", "workspacePath", "project_path", "projectPath", "root")
+    for ln in lines:
+        for key in keys:
+            val = ln.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        msg = ln.get("message")
+        if isinstance(msg, dict):
+            for key in keys:
+                val = msg.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+    return decode_workspace_path(encoded_name)
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +367,7 @@ class ClaudeLogParser:
             return None
 
         session = Session()
-        ws_path = decode_workspace_path(encoded_name)
+        ws_path = workspace_path_from_log_lines(lines, encoded_name)
         session.workspace_path = ws_path
         session.workspace_name = workspace_name_from_path(ws_path)
         session.workspace_id = f"claude-{encoded_name}"

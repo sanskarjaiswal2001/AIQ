@@ -383,11 +383,45 @@ DB_PATH=./aiq.db DASHBOARD_DIR=../dashboard python -m uvicorn main:app --port 80
 # Run collector locally
 cd ../collector
 pip install -e .
+aiq status
 aiq collect --output-file /tmp/metrics.json
 
 # Push to local server
 aiq collect --server-url http://localhost:8000 --employee-id test-dev
 ```
+
+## Troubleshooting Project Detection
+
+AIQ detects projects automatically from local assistant logs:
+
+- Claude Code: prefers the real `cwd` stored in each session log, then falls back to decoding `~/.claude/projects/<encoded-project-path>`.
+- Codex/OpenCode/Cursor/Copilot: uses `cwd`, `workspacePath`, `projectPath`, `repo`, or parent-session metadata when present; otherwise it falls back to the log file's containing folder.
+
+On an employee machine, run:
+
+```bash
+aiq status
+```
+
+Check these lines:
+
+```text
+Sessions found    : N
+Requests found    : N
+Projects detected : N
+  project        : project-name — /real/workspace/path
+```
+
+If `Projects detected` is `0` or paths look wrong:
+
+1. Confirm the right harness log directory exists in `aiq status`.
+2. If logs are elsewhere, set the directory explicitly, for example:
+   ```bash
+   aiq config --claude-dir "/path/to/.claude/projects"
+   aiq config --harnesses claude,codex --codex-dir "/path/to/.codex"
+   ```
+3. Run `aiq collect --output-file /tmp/metrics.json` and inspect the top-level `projects` array.
+4. Run `aiq collect` again to push the corrected snapshot to mothership.
 
 ## Tech Stack
 

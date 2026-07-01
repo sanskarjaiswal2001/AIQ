@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .analyzer import Analyzer
 from .collect import collect_metrics, post_to_server, print_summary
 from .harnesses import SUPPORTED_HARNESSES, collect_sessions, discover_available_harnesses
 
@@ -411,6 +412,7 @@ def command_status(args: argparse.Namespace) -> int:
     }
     availability = discover_available_harnesses(harness_dirs)
     sessions = collect_sessions(harnesses, dirs=harness_dirs)
+    projects = Analyzer()._build_projects(sessions) if sessions else []
     ok, msg = ping_server(server_url)
 
     print("AIQ Collector Status")
@@ -427,6 +429,11 @@ def command_status(args: argparse.Namespace) -> int:
         print(f"  {name:<8} logs  : {info['path']} ({'exists' if info['exists'] else 'missing'})")
     print(f"Sessions found    : {len(sessions)}")
     print(f"Requests found    : {sum(s.request_count for s in sessions)}")
+    print(f"Projects detected : {len(projects)}")
+    for project in projects[:8]:
+        print(f"  project        : {project.get('project_name') or 'unknown'} — {project.get('project_path') or 'unknown'}")
+    if len(projects) > 8:
+        print(f"  project        : … {len(projects) - 8} more")
     print(f"Server connection : {'ok' if ok else 'failed'}")
     if msg:
         print(f"Server response   : {msg[:200]}")

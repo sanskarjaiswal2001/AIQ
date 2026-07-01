@@ -55,7 +55,7 @@ def _make_user_line(content, timestamp="2026-06-01T10:00:00.000Z", sid="test-ses
         "type": "user",
         "message": {"role": "user", "content": content},
         "uuid": "u1", "timestamp": timestamp,
-        "sessionId": sid, "cwd": "/home/user/project",
+        "sessionId": sid,
         "version": "2.1.141", "gitBranch": "main",
     }
 
@@ -208,6 +208,23 @@ class TestParser:
         assert r.output_tokens == 100 + 50
         # code blocks: 1 from Edit tool + 1 from text fence
         assert r.ai_loc == 2 + 2  # 2 from edit, 2 from text
+
+    def test_parse_prefers_real_cwd_over_lossy_encoded_project_dir(self, tmp_path):
+        """Claude logs include cwd; use it because encoded folder names are lossy on office machines."""
+        project_dir = tmp_path / "-Users-office-Work-Finance-App"
+        project_dir.mkdir()
+        jsonl = project_dir / "office.jsonl"
+        lines = [
+            _make_user_line("Implement budget report", sid="office-session"),
+            _make_assistant_line([{"type": "text", "text": "Done"}], sid="office-session"),
+        ]
+        lines[0]["cwd"] = "/Users/office/Work/finance-app"
+        _write_session_jsonl(jsonl, lines)
+
+        sessions = ClaudeLogParser(claude_dir=str(tmp_path)).parse_directory()
+        assert len(sessions) == 1
+        assert sessions[0].workspace_path == "/Users/office/Work/finance-app"
+        assert sessions[0].workspace_name == "finance-app"
 
     def test_skip_tool_result_arrays(self, tmp_path):
         """User lines with array content (tool results) should not start new requests."""
@@ -830,6 +847,27 @@ class TestMultiHarness:
         assert req.model == "qwen3-coder"
         assert req.edited_files == ["/work/mobile-app/login.ts"]
         assert req.ai_loc == 1
+        assert sessions[0].workspace_path == "/work/mobile-app"
+        assert sessions[0].workspace_name == "mobile-app"
+
+    def test_generic_parent_workspace_metadata_survives_flattening(self, tmp_path):
+        """Nested JSON logs often put workspace/cwd on the parent object, not each message."""
+        root = tmp_path / "cursor"
+        root.mkdir()
+        log = root / "session.json"
+        log.write_text(json.dumps({
+            "id": "cur1",
+            "cwd": "/Users/office/Client Work/ledger-ui",
+            "messages": [
+                {"role": "user", "content": "Fix dashboard route", "createdAt": "2026-06-04T09:00:00Z"},
+                {"role": "assistant", "content": "Fixed", "model": "cursor-agent", "usage": {"input_tokens": 44, "output_tokens": 12}},
+            ],
+        }), encoding="utf-8")
+
+        sessions = GenericJsonAgentParser(HarnessSpec("cursor", str(root), "cursor"), root).parse_directory()
+        assert len(sessions) == 1
+        assert sessions[0].workspace_path == "/Users/office/Client Work/ledger-ui"
+        assert sessions[0].workspace_name == "ledger-ui"
 
     def test_collect_sessions_multiple_harnesses(self, tmp_path):
         claude_root = tmp_path / "claude"

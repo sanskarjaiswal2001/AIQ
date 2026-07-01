@@ -264,19 +264,33 @@ def _read_json_records(path: Path) -> Iterable[dict[str, Any]]:
     return list(_flatten_json_records(obj))
 
 
-def _flatten_json_records(obj: Any) -> Iterable[dict[str, Any]]:
+def _flatten_json_records(obj: Any, inherited: dict[str, Any] | None = None) -> Iterable[dict[str, Any]]:
+    inherited = inherited or {}
     if isinstance(obj, list):
         for item in obj:
-            yield from _flatten_json_records(item)
+            yield from _flatten_json_records(item, inherited)
     elif isinstance(obj, dict):
+        context_keys = {
+            "cwd", "workspace", "workspace_path", "workspacePath", "project_path", "projectPath",
+            "root", "repo", "repository", "session_id", "sessionId", "conversation_id",
+            "conversationId", "thread_id", "id", "git_branch", "gitBranch", "branch",
+            "version", "app_version", "agent_version",
+        }
+        context = dict(inherited)
+        for key in context_keys:
+            val = obj.get(key)
+            if val is not None and key not in context:
+                context[key] = val
         yielded_child = False
         for key in ("messages", "items", "events", "turns", "records", "entries"):
             val = obj.get(key)
             if isinstance(val, list):
                 yielded_child = True
-                yield from _flatten_json_records(val)
+                yield from _flatten_json_records(val, context)
         if not yielded_child:
-            yield obj
+            merged = dict(context)
+            merged.update(obj)
+            yield merged
 
 
 def _record_role(rec: dict[str, Any]) -> str:
