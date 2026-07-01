@@ -341,8 +341,11 @@ def _employee_detail_payload(employee_id: str) -> dict[str, Any] | None:
                 raw_score = v or 0
             vals.append(float(raw_score))
         overall = sum(vals) / len(vals) if vals else 0.0
-        summary = detail.get("summary") or {}
+        summary = dict(detail.get("summary") or {})
+        summary.setdefault("period_start", detail.get("period_start"))
+        summary.setdefault("period_end", detail.get("period_end"))
         plan_context = detail.get("plan_context") or {}
+        detail["summary"] = summary
         detail["cost_interpretation"] = interpret_cost(summary, plan_context)
         detail["plan_fit"] = analyze_plan_fit(summary, plan_context, overall)
         from recommendations import recommendations_for_employee
@@ -493,6 +496,7 @@ def update_employee_plan(
         "provider", "plan_id", "plan_type", "plan_name", "billing_mode",
         "seat_cost_usd", "rolling_window_usd", "rolling_window_days",
         "rolling_window_hours", "included_credits", "api_cost_buffer",
+        "context_window_tokens", "max_context_tokens",
     }
     plan_context = {k: v for k, v in body.items() if k in allowed and v not in ("", None)}
     if not plan_context:
@@ -712,7 +716,7 @@ def staffing_intelligence() -> dict[str, Any]:
         m = e.get("metrics") or {}
         score = float(m.get("overall_score") or 0)
         requests = int(m.get("total_requests") or 0)
-        cost = float(m.get("estimated_cost_usd") or 0)
+        cost = float(m.get("display_cost_usd", m.get("estimated_cost_usd", 0)) or 0)
         eid = str(e.get("employee_id") or "")
         projects_n = project_count_by_employee.get(eid, int(m.get("total_workspaces") or 0))
         high_flags = int(e.get("high_severity_count") or 0)

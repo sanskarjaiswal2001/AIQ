@@ -267,6 +267,50 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {k: row[k] for k in row.keys()}
 
 
+def _plan_override_for_employee(conn: sqlite3.Connection, employee_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT plan_context_json FROM employee_plan_overrides WHERE employee_id = ?",
+        (employee_id,),
+    ).fetchone()
+    return json.loads(row["plan_context_json"]) if row else None
+
+
+def _plan_context_for_snapshot(conn: sqlite3.Connection, employee_id: str, snapshot_id: int | None) -> dict[str, Any]:
+    stored: dict[str, Any] = {}
+    if snapshot_id is not None:
+        row = conn.execute("SELECT payload_json FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone()
+        if row:
+            try:
+                stored = (json.loads(row["payload_json"]) or {}).get("plan_context") or {}
+            except Exception:
+                stored = {}
+    override = _plan_override_for_employee(conn, employee_id) or {}
+    return {**stored, **override}
+
+
+def _summary_for_cost(row: sqlite3.Row | dict[str, Any], *, period_start: str | None = None, period_end: str | None = None) -> dict[str, Any]:
+    def val(key: str, default: Any = 0) -> Any:
+        if isinstance(row, sqlite3.Row):
+            return row[key] if key in row.keys() else default
+        return row.get(key, default)
+
+    return {
+        "period_start": period_start if period_start is not None else val("period_start", None),
+        "period_end": period_end if period_end is not None else val("period_end", None),
+        "total_sessions": val("total_sessions", 0),
+        "total_requests": val("total_requests", 0),
+        "total_input_tokens": val("total_input_tokens", 0),
+        "total_output_tokens": val("total_output_tokens", 0),
+        "estimated_cost_usd": val("estimated_cost_usd", 0),
+    }
+
+
+def _cost_interpretation(summary: dict[str, Any], plan_context: dict[str, Any] | None) -> dict[str, Any]:
+    from cost_engine import interpret_cost
+
+    return interpret_cost(summary, plan_context or {})
+
+
 # ---------------------------------------------------------------------------
 # Auth / registration
 # ---------------------------------------------------------------------------
@@ -453,6 +497,9 @@ def list_employees(team: str | None = None) -> list[dict[str, Any]]:
                     (snap["id"],),
                 ).fetchone()
                 if mrow:
+                    summary_for_cost = _summary_for_cost(mrow, period_start=period_start, period_end=period_end)
+                    plan_context = _plan_context_for_snapshot(conn, eid, snap["id"])
+                    cost_info = _cost_interpretation(summary_for_cost, plan_context)
                     metrics = {
                         "total_sessions": mrow["total_sessions"],
                         "total_requests": mrow["total_requests"],
@@ -461,6 +508,13 @@ def list_employees(team: str | None = None) -> list[dict[str, Any]]:
                         "total_input_tokens": mrow["total_input_tokens"],
                         "total_output_tokens": mrow["total_output_tokens"],
                         "estimated_cost_usd": mrow["estimated_cost_usd"],
+                        "display_cost_usd": cost_info.get("display_cost", mrow["estimated_cost_usd"]),
+                        "cost_label": cost_info.get("cost_label", "Estimated API Spend"),
+                        "estimated_token_cost_usd": cost_info.get("estimated_token_cost", mrow["estimated_cost_usd"]),
+                        "billed_months": cost_info.get("billed_months", 0),
+                        "seat_cost_usd": cost_info.get("seat_cost", 0),
+                        "utilization": cost_info.get("utilization", 0),
+                        "pressure_level": cost_info.get("pressure_level", "low"),
                         "score_prompt_quality": mrow["score_prompt_quality"],
                         "score_session_hygiene": mrow["score_session_hygiene"],
                         "score_code_review": mrow["score_code_review"],
@@ -916,17 +970,25 @@ def get_team_overview() -> dict[str, Any]:
             if not m:
                 continue
             aps = get_anti_patterns_for_snapshot(conn, snap["id"])
+            summary_for_cost = _summary_for_cost(m, period_start=m["period_start"], period_end=m["period_end"])
+            plan_context = _plan_context_for_snapshot(conn, eid, snap["id"])
+            cost_info = _cost_interpretation(summary_for_cost, plan_context)
             per_employee.append(
                 {
                     "employee_id": eid,
                     "team": emp["team"],
                     "total_requests": m["total_requests"],
                     "estimated_cost_usd": m["estimated_cost_usd"],
+                    "display_cost_usd": cost_info.get("display_cost", m["estimated_cost_usd"]),
+                    "cost_label": cost_info.get("cost_label", "Estimated API Spend"),
                     "overall_score": m["overall_score"],
                     "anti_patterns": aps,
                     "summary": {
+                        "period_start": m["period_start"],
+                        "period_end": m["period_end"],
                         "total_requests": m["total_requests"],
                         "estimated_cost_usd": m["estimated_cost_usd"],
+                        "display_cost_usd": cost_info.get("display_cost", m["estimated_cost_usd"]),
                     },
                     "practice_scores": {
                         "prompt_quality": m["score_prompt_quality"],
@@ -939,7 +1001,8 @@ def get_team_overview() -> dict[str, Any]:
             )
 
         total_requests = sum(int(e["total_requests"] or 0) for e in per_employee)
-        total_cost = round(sum(float(e["estimated_cost_usd"] or 0) for e in per_employee), 2)
+        total_cost = round(sum(float(e["display_cost_usd"] or 0) for e in per_employee), 2)
+        estimated_token_cost = round(sum(float(e["estimated_cost_usd"] or 0) for e in per_employee), 2)
         scores = [float(e["overall_score"] or 0) for e in per_employee]
         avg_score = round(sum(scores) / len(scores), 2) if scores else 0.0
 
@@ -949,7 +1012,8 @@ def get_team_overview() -> dict[str, Any]:
             t = e["team"] or "unassigned"
             tb = team_breakdown.setdefault(t, {"employees": 0, "avg_score": 0.0, "total_cost": 0.0, "total_requests": 0, "_scores": []})
             tb["employees"] += 1
-            tb["total_cost"] = round(tb["total_cost"] + float(e["estimated_cost_usd"] or 0), 2)
+            tb["total_cost"] = round(tb["total_cost"] + float(e["display_cost_usd"] or 0), 2)
+            tb["estimated_token_cost"] = round(tb.get("estimated_token_cost", 0.0) + float(e["estimated_cost_usd"] or 0), 2)
             tb["total_requests"] += int(e["total_requests"] or 0)
             tb["_scores"].append(float(e["overall_score"] or 0))
         for t, tb in team_breakdown.items():
@@ -1036,6 +1100,8 @@ def get_team_overview() -> dict[str, Any]:
             "total_employees": total_employees,
             "total_requests": total_requests,
             "total_cost_usd": total_cost,
+            "estimated_token_cost_usd": estimated_token_cost,
+            "cost_label": "Billed Plan Spend",
             "avg_overall_score": avg_score,
             "team_breakdown": team_breakdown,
             "top_training_needs": top_training_needs,
@@ -1080,6 +1146,27 @@ def get_all_projects() -> list[dict[str, Any]]:
 
         snap_ids = [r["snapshot_id"] for r in latest_snapshots]
         placeholders = ",".join("?" * len(snap_ids))
+
+        # For admin spend, first compute each employee's latest billed plan spend.
+        # Project rows then receive a proportional share based on that employee's
+        # token-estimated project usage. This keeps project finance aligned with
+        # seat/rolling/API billing semantics while preserving token cost as usage
+        # pressure metadata.
+        employee_costs: dict[str, dict[str, float]] = {}
+        for latest in latest_snapshots:
+            m = conn.execute(
+                "SELECT * FROM metrics_summary WHERE snapshot_id = ? LIMIT 1",
+                (latest["snapshot_id"],),
+            ).fetchone()
+            if not m:
+                continue
+            summary_for_cost = _summary_for_cost(m, period_start=m["period_start"], period_end=m["period_end"])
+            plan_context = _plan_context_for_snapshot(conn, latest["employee_id"], latest["snapshot_id"])
+            cost_info = _cost_interpretation(summary_for_cost, plan_context)
+            employee_costs[latest["employee_id"]] = {
+                "estimated_token_cost": float(m["estimated_cost_usd"] or 0.0),
+                "display_cost": float(cost_info.get("display_cost", m["estimated_cost_usd"]) or 0.0),
+            }
 
         rows = conn.execute(
             f"""
@@ -1126,6 +1213,15 @@ def get_all_projects() -> list[dict[str, Any]]:
                     "work_types": {},
                 }
             proj = projects_map[pid]
+            emp_cost = employee_costs.get(r["employee_id"], {})
+            employee_token_cost = float(emp_cost.get("estimated_token_cost", 0.0) or 0.0)
+            employee_display_cost = float(emp_cost.get("display_cost", r["estimated_cost_usd"] or 0.0) or 0.0)
+            project_token_cost = float(r["estimated_cost_usd"] or 0.0)
+            project_display_cost = (
+                employee_display_cost * (project_token_cost / employee_token_cost)
+                if employee_token_cost > 0
+                else employee_display_cost
+            )
             proj["employees"].append({
                 "employee_id": r["employee_id"],
                 "employee_name": r["employee_name"],
@@ -1134,7 +1230,8 @@ def get_all_projects() -> list[dict[str, Any]]:
                 "sessions": r["sessions"],
                 "requests": r["requests"],
                 "ai_loc": r["ai_loc"],
-                "cost_usd": r["estimated_cost_usd"],
+                "cost_usd": round(project_display_cost, 2),
+                "estimated_token_cost_usd": round(project_token_cost, 4),
                 "active_days": r["active_days"],
             })
             proj["total_sessions"] += r["sessions"] or 0
@@ -1143,7 +1240,9 @@ def get_all_projects() -> list[dict[str, Any]]:
             proj["total_user_loc"] += r["user_loc"] or 0
             proj["total_input_tokens"] += r["input_tokens"] or 0
             proj["total_output_tokens"] += r["output_tokens"] or 0
-            proj["total_cost_usd"] += r["estimated_cost_usd"] or 0.0
+            proj["total_cost_usd"] += project_display_cost
+            proj["estimated_token_cost_usd"] = proj.get("estimated_token_cost_usd", 0.0) + project_token_cost
+            proj["cost_label"] = "Billed Plan Spend"
             proj["active_days"] = max(proj["active_days"], r["active_days"] or 0)
             proj["files_edited_count"] += r["files_edited_count"] or 0
             if r["first_activity"] and (not proj["first_activity"] or r["first_activity"] < proj["first_activity"]):
@@ -1152,11 +1251,26 @@ def get_all_projects() -> list[dict[str, Any]]:
                 proj["last_activity"] = r["last_activity"]
             # Merge model_usage and work_types
             for k, v in (json.loads(r["model_usage_json"] or "{}")).items():
-                proj["model_usage"][k] = proj["model_usage"].get(k, 0) + v
+                if isinstance(v, dict):
+                    current = proj["model_usage"].setdefault(k, {})
+                    if isinstance(current, dict):
+                        for mk, mv in v.items():
+                            if isinstance(mv, (int, float)):
+                                current[mk] = current.get(mk, 0) + mv
+                            else:
+                                current[mk] = mv
+                    else:
+                        proj["model_usage"][k] = v
+                else:
+                    current = proj["model_usage"].get(k, 0)
+                    proj["model_usage"][k] = (current if isinstance(current, (int, float)) else 0) + (v or 0)
             for k, v in (json.loads(r["work_types_json"] or "{}")).items():
                 proj["work_types"][k] = proj["work_types"].get(k, 0) + v
 
         result = list(projects_map.values())
+        for p in result:
+            p["total_cost_usd"] = round(float(p.get("total_cost_usd") or 0), 2)
+            p["estimated_token_cost_usd"] = round(float(p.get("estimated_token_cost_usd") or 0), 4)
         result.sort(key=lambda p: p["total_cost_usd"], reverse=True)
         return result
 

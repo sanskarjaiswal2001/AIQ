@@ -176,7 +176,7 @@ async function renderOverview() {
       ${statCard('Total Employees', data.total_employees, 'active in period')}
       ${statCard('Total Requests', fmtNum(data.total_requests), 'AI interactions')}
       ${statCard('Avg Efficiency', `${data.avg_overall_score?.toFixed(1) || 0}`, '/ 100')}
-      ${statCard('Total AI Cost', fmtCost(data.total_cost_usd), 'estimated')}
+      ${statCard('AI Spend', fmtCost(data.total_cost_usd), data.cost_label || 'billed plan spend')}
     `;
 
     // Score distribution
@@ -203,7 +203,7 @@ async function renderOverview() {
     `).join('');
     tbEl.innerHTML = `
       <div class="team-row header">
-        <span>Team</span><span>People</span><span>Score</span><span>Cost</span><span>Requests</span>
+        <span>Team</span><span>People</span><span>Score</span><span>Spend</span><span>Requests</span>
       </div>
       ${teamRows || emptyRow('No team data yet')}
     `;
@@ -284,6 +284,7 @@ function planIdentityHTML(planContext = {}, costInfo = {}) {
       <div class="project-meta-item"><div class="pmi-label">Billing Mode</div><div class="pmi-value">${esc(billingModeLabel(billingMode))}</div></div>
       <div class="project-meta-item"><div class="pmi-label">Seat Cost</div><div class="pmi-value">${planContext.seat_cost_usd ? fmtCost(Number(planContext.seat_cost_usd)) : '—'}</div></div>
       <div class="project-meta-item"><div class="pmi-label">Rolling Window</div><div class="pmi-value">${esc(rolling)}</div></div>
+      <div class="project-meta-item"><div class="pmi-label">Context Window</div><div class="pmi-value">${planContext.context_window_tokens || planContext.max_context_tokens ? fmtNum(Number(planContext.context_window_tokens || planContext.max_context_tokens)) + ' tokens' : '—'}</div></div>
       <div class="project-meta-item"><div class="pmi-label">Usage Meaning</div><div class="pmi-value">${esc(costInfo.cost_label || 'Estimated token cost')}</div></div>
     </div>`;
 }
@@ -337,7 +338,7 @@ async function renderExecutive() {
     `).join('');
     el.innerHTML = `
       <div class="stat-cards">
-        ${statCard('AI Spend', fmtCost(t.cost_usd), 'project-attributed')}
+        ${statCard('AI Spend', fmtCost(t.cost_usd), 'plan-billed / project-attributed')}
         ${statCard('Projects', fmtNum(t.projects || 0), 'active')}
         ${statCard('People', fmtNum(t.employees || 0), 'contributors')}
         ${statCard('AI LOC / $', t.ai_loc_per_dollar || 0, 'efficiency proxy')}
@@ -461,7 +462,7 @@ function employeeCard(emp) {
         <div class="ec-stat"><div class="ec-stat-val">${fmtNum(m.total_requests)}</div><div class="ec-stat-label">Requests</div></div>
         <div class="ec-stat"><div class="ec-stat-val">${fmtNum(m.total_sessions)}</div><div class="ec-stat-label">Sessions</div></div>
         <div class="ec-stat"><div class="ec-stat-val">${fmtNum(m.total_ai_loc)}</div><div class="ec-stat-label">AI LOC</div></div>
-        <div class="ec-stat"><div class="ec-stat-val">${fmtCost(m.estimated_cost_usd)}</div><div class="ec-stat-label">Cost</div></div>
+        <div class="ec-stat"><div class="ec-stat-val">${fmtCost(m.display_cost_usd ?? m.estimated_cost_usd)}</div><div class="ec-stat-label">AI Spend</div></div>
       </div>
       ${flagBadges ? `<div class="ec-flags">${flagBadges}</div>` : ''}
     </div>
@@ -515,7 +516,8 @@ async function openEmployeeModal(employeeId) {
       ['AI LOC', fmtNum(summary.total_ai_loc)],
       ['Input Tokens', fmtNum(summary.total_input_tokens)],
       ['Output Tokens', fmtNum(summary.total_output_tokens)],
-      ['Est. Cost', fmtCost(summary.estimated_cost_usd)],
+      ['AI Spend', fmtCost(emp.cost_interpretation?.display_cost ?? summary.display_cost_usd ?? summary.estimated_cost_usd)],
+      ['Token Estimate', fmtCost(emp.cost_interpretation?.estimated_token_cost ?? summary.estimated_cost_usd)],
       ['Period', `${fmtDate(emp.period_start)} → ${fmtDate(emp.period_end)}`],
     ].map(([l, v]) => `<div class="modal-summary-item"><div class="msi-label">${l}</div><div class="msi-value">${v}</div></div>`).join('');
 
@@ -578,7 +580,7 @@ async function openEmployeeModal(employeeId) {
       <div class="modal-section">
         <h3>Model Usage</h3>
         <div class="modal-model-usage">
-          <div class="model-row header"><span>Model</span><span>Requests</span><span>Input</span><span>Output</span><span>Cost</span></div>
+          <div class="model-row header"><span>Model</span><span>Requests</span><span>Input</span><span>Output</span><span>Token Est.</span></div>
           ${modelRows || emptyRow('No model usage data')}
         </div>
       </div>
@@ -700,6 +702,7 @@ async function renderPlans() {
           <div class="filters plan-config-form" data-employee="${esc(emp.employee_id)}">
             <select class="filter-select plan-id-input"><option value="">Select confirmed plan…</option>${planOptions}</select>
             <input class="filter-select rolling-window-input" placeholder="Rolling window $ e.g. 25" style="max-width:180px" />
+            <input class="filter-select context-window-input" placeholder="Context tokens e.g. 200000" style="max-width:220px" />
             <button class="btn btn-secondary save-plan-btn">Save Plan</button>
           </div>
         </div>
@@ -721,6 +724,7 @@ async function renderPlans() {
       if (!planId) return showToast('Select a plan first');
       const selected = plans.find(p => p.id === planId) || {};
       const rolling = Number(form.querySelector('.rolling-window-input').value || selected.price_usd || 0);
+      const contextWindow = Number(form.querySelector('.context-window-input').value || 0);
       await apiPut(`/api/employees/${encodeURIComponent(employeeId)}/plan`, {
         provider: selected.provider,
         plan_id: selected.id,
@@ -731,6 +735,7 @@ async function renderPlans() {
         rolling_window_usd: rolling || undefined,
         rolling_window_days: selected.rolling_window_days,
         rolling_window_hours: selected.rolling_window_hours,
+        context_window_tokens: contextWindow || undefined,
       });
       allEmployees = [];
       showToast('Plan saved');
@@ -959,7 +964,7 @@ async function openProjectModal(projectId) {
 
     // Stat cards
     const statCards = [
-      ['Total Cost', fmtCost(p.total_cost_usd)],
+      ['AI Spend', fmtCost(p.total_cost_usd)],
       ['Total Requests', fmtNum(p.total_requests)],
       ['Total AI LOC', fmtNum(p.total_ai_loc)],
       ['Active Days', p.active_days || 0],
@@ -1029,7 +1034,7 @@ async function openProjectModal(projectId) {
         <h3>Employee Breakdown (${employees.length})</h3>
         <table class="proj-emp-table">
           <thead><tr>
-            <th>Name</th><th>Team</th><th>Sessions</th><th>Requests</th><th>AI LOC</th><th>Cost</th><th>Active Days</th>
+            <th>Name</th><th>Team</th><th>Sessions</th><th>Requests</th><th>AI LOC</th><th>Spend</th><th>Active Days</th>
           </tr></thead>
           <tbody>${empRows}</tbody>
         </table>
@@ -1041,7 +1046,7 @@ async function openProjectModal(projectId) {
       <div class="modal-section">
         <h3>Model Usage</h3>
         <div class="modal-model-usage">
-          <div class="model-row header"><span>Model</span><span>Requests</span><span>Input</span><span>Output</span><span>Cost</span></div>
+          <div class="model-row header"><span>Model</span><span>Requests</span><span>Input</span><span>Output</span><span>Token Est.</span></div>
           ${modelHTML}
         </div>
       </div>
@@ -1185,9 +1190,12 @@ async function renderMe() {
         <span class="plan-badge ${planClass(planFit.recommendation || plan.action)}">${esc(planFit.recommended_plan_id || planFit.recommendation || plan.plan || 'current')}</span>
       </div>
       <div class="project-meta-grid" style="margin-top:12px">
-        <div class="project-meta-item"><div class="pmi-label">Cost Meaning</div><div class="pmi-value">${esc(costInfo.cost_label || 'Estimated Cost')}</div></div>
+        <div class="project-meta-item"><div class="pmi-label">Spend Meaning</div><div class="pmi-value">${esc(costInfo.cost_label || 'Estimated API Spend')}</div></div>
+        <div class="project-meta-item"><div class="pmi-label">Token Estimate</div><div class="pmi-value">${fmtCost(costInfo.estimated_token_cost ?? summary.estimated_cost_usd)}</div></div>
+        <div class="project-meta-item"><div class="pmi-label">Billed Months</div><div class="pmi-value">${costInfo.billed_months ?? '—'}</div></div>
         <div class="project-meta-item"><div class="pmi-label">Pressure</div><div class="pmi-value">${esc(costInfo.pressure_level || 'unknown')}</div></div>
         <div class="project-meta-item"><div class="pmi-label">Utilization</div><div class="pmi-value">${costInfo.utilization != null ? `${Math.round((costInfo.utilization || 0) * 100)}%` : '—'}</div></div>
+        <div class="project-meta-item"><div class="pmi-label">Context Usage</div><div class="pmi-value">${costInfo.context_window_tokens ? `${Math.round((costInfo.context_utilization || 0) * 100)}% of ${fmtNum(costInfo.context_window_tokens)}` : '—'}</div></div>
         <div class="project-meta-item"><div class="pmi-label">Plan Source</div><div class="pmi-value">${esc(planSource)}</div></div>
       </div>
       ${planIdentityHTML(planContext, costInfo)}
@@ -1198,7 +1206,7 @@ async function renderMe() {
         ${statCard('Employee', esc(emp.name || emp.employee_id || 'You'), esc(emp.team || 'team not set'))}
         ${statCard('Requests', fmtNum(summary.total_requests), 'AI interactions')}
         ${statCard('Sessions', fmtNum(summary.total_sessions), 'logged sessions')}
-        ${statCard('AI Cost', fmtCost(summary.estimated_cost_usd), 'estimated')}
+        ${statCard('AI Spend', fmtCost(costInfo.display_cost ?? summary.display_cost_usd ?? summary.estimated_cost_usd), costInfo.cost_label || 'billed / estimated')}
         ${statCard('AI LOC', fmtNum(summary.total_ai_loc), 'generated lines')}
       </div>
       <div class="card-grid">
