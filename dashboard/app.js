@@ -1274,6 +1274,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!IS_EMPLOYEE_DASHBOARD && item.dataset.view === 'me') item.remove();
   });
   document.querySelector('.logo-sub').textContent = IS_EMPLOYEE_DASHBOARD ? 'Employee Dashboard' : 'Mothership';
+  const modeChip = document.getElementById('dashboardModeChip');
+  if (modeChip) modeChip.textContent = IS_EMPLOYEE_DASHBOARD ? 'Employee View' : 'Mothership';
   document.title = IS_EMPLOYEE_DASHBOARD ? 'AIQ Employee Dashboard' : 'AIQ Mothership Dashboard';
 
   // Nav switching
