@@ -94,7 +94,10 @@ def collect_sessions(
         if not base.exists():
             continue
         if harness == "claude":
-            sessions.extend(ClaudeLogParser(claude_dir=base).parse_directory())
+            parsed = ClaudeLogParser(claude_dir=base).parse_directory()
+            for sess in parsed:
+                sess.harness = "claude"
+            sessions.extend(parsed)
         else:
             spec = HarnessSpec(harness, DEFAULT_HARNESS_DIRS[harness], harness)
             sessions.extend(GenericJsonAgentParser(spec, base).parse_directory())
@@ -146,6 +149,8 @@ class GenericJsonAgentParser:
             workspace_path=workspace_path,
             workspace_name=workspace_name_from_path(workspace_path),
             workspace_id=f"{self.spec.workspace_prefix}-{_safe_id(workspace_path or path.stem)}",
+            harness=self.spec.name,
+            git_remote_url=_first_string(records, ["git_remote_url", "gitRemoteUrl", "remote_url", "repository_url", "repositoryUrl"]),
         )
         session.git_branch = _first_string(records, ["git_branch", "gitBranch", "branch"]) or ""
         session.version = _first_string(records, ["version", "app_version", "agent_version"]) or ""

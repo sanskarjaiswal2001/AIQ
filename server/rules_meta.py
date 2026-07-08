@@ -5,11 +5,11 @@ suggestion, training) for all 20 anti-pattern rules that the collector can
 detect. The dashboard uses this to render human-readable rule descriptions
 and to map triggered rules to training tracks.
 
-The ``group`` field uses the 5 practice groups from AIEC:
-  prompt-quality, session-hygiene, code-review, tool-mastery, context-management
+The ``group`` field uses AIQ practice groups, not Microsoft's defaults.
+Rules also carry an audit verdict:
+  keep = useful signal, watch = useful but noisy proxy, off = weak/intrusive by default.
 
-The ``training`` field maps each rule to a training track + module + priority,
-mirroring the TRAINING_MAP in recommendations.py.
+The ``training`` field maps each rule to a training track + module + priority.
 """
 
 from __future__ import annotations
@@ -214,8 +214,43 @@ RULES_META: list[dict] = [
     },
 ]
 
+# Default governance after AIQ rule audit. Keep rules that measure engineering
+# behavior; leave weak, intrusive, or tool-specific proxies available but off.
+DEFAULT_RULE_POLICY: dict[str, dict[str, object]] = {
+    "lazy-prompting": {"audit_status": "watch", "basis": "Short prompts are noisy, but useful when they dominate a period."},
+    "repeated-prompts": {"audit_status": "keep", "basis": "Repeated asks are a direct rework/friction signal."},
+    "no-spec-driven-development": {"audit_status": "keep", "basis": "Agentic-coding guidance favors explicit task definitions and acceptance criteria."},
+    "verbose-prompt-no-compression": {"audit_status": "keep", "basis": "Context engineering favors selection/compression over dumping large prompts."},
+    "no-plan-mode": {"default_enabled": False, "audit_status": "off", "basis": "Tool-specific proxy. Planning matters, but plan-mode telemetry is not portable."},
+    "no-skills": {"default_enabled": False, "audit_status": "off", "basis": "Claude-specific proxy. Reuse is good, but not every team uses AIQ skills."},
+    "speed-accept": {"audit_status": "keep", "basis": "Human verification is a core AI-code safety practice."},
+    "copy-paste-blindness": {"audit_status": "watch", "basis": "Review behavior matters, but file-reference absence is only a proxy."},
+    "premium-waste": {"audit_status": "keep", "basis": "Cost routing is valid when the turn is truly low-context and no work is produced."},
+    "premium-for-lookup-questions": {"audit_status": "keep", "basis": "Simple lookup routing is a direct plan-efficiency signal."},
+    "model-overreliance": {"audit_status": "watch", "basis": "Useful for API spend; lower priority on fixed or rolling seats."},
+    "runaway-agent-loops": {"audit_status": "keep", "basis": "Tool-loop volume is a measurable waste/reliability signal."},
+    "session-drift": {"audit_status": "keep", "basis": "Long sessions increase context drift risk; use as a coaching signal."},
+    "mega-sessions": {"audit_status": "keep", "basis": "Extreme sessions are stronger context/cost risk than normal long work."},
+    "high-cancellation": {"audit_status": "keep", "basis": "Cancellations directly show wasted turns or misalignment."},
+    "frustration-signals": {"audit_status": "watch", "basis": "Useful friction signal, but never a performance judgment."},
+    "context-engineering-gaps": {"audit_status": "keep", "basis": "Context engineering research emphasizes file/context selection, tools, and reusable instructions."},
+    "tunnel-vision": {"default_enabled": False, "audit_status": "off", "basis": "Single-project focus is often healthy; this is not a useful anti-pattern."},
+    "late-night-coding": {"default_enabled": False, "audit_status": "off", "basis": "Lifestyle surveillance is not an AI-efficiency rule."},
+    "weekend-overwork": {"default_enabled": False, "audit_status": "off", "basis": "Lifestyle surveillance is not an AI-efficiency rule."},
+    "rolling-window-pressure": {"audit_status": "keep", "basis": "Quota pressure is valid when plan context is explicitly configured."},
+}
+
+
+def _with_policy(rule: dict) -> dict:
+    out = dict(rule)
+    policy = DEFAULT_RULE_POLICY.get(out["id"], {})
+    out.setdefault("default_enabled", bool(policy.get("default_enabled", True)))
+    out.setdefault("audit_status", str(policy.get("audit_status", "keep")))
+    out.setdefault("basis", str(policy.get("basis", "Observable log signal.")))
+    return out
+
 # Quick lookup by rule id.
-RULES_BY_ID: dict[str, dict] = {r["id"]: r for r in RULES_META}
+RULES_BY_ID: dict[str, dict] = {r["id"]: _with_policy(r) for r in RULES_META}
 
 # Ordered set of all rule ids (order is stable and matches RULES_META).
 ALL_RULE_IDS: list[str] = [r["id"] for r in RULES_META]
@@ -228,4 +263,4 @@ def get_rule(rule_id: str) -> dict | None:
 
 def all_rules() -> list[dict]:
     """Return metadata for all rules (a fresh list of plain dicts)."""
-    return [dict(r) for r in RULES_META]
+    return [_with_policy(r) for r in RULES_META]

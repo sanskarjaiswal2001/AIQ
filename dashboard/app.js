@@ -28,7 +28,7 @@ async function api(path, opts = {}) {
     return res.json();
   } catch (e) {
     if (e.name === 'AbortError') {
-      throw new Error(`API ${path} timed out after ${Math.round(timeoutMs / 1000)}s. Check that the mothership is still running and reachable.`);
+      throw new Error(`API ${path} timed out after ${Math.round(timeoutMs / 1000)}s. Check that the AIQ server is still running and reachable.`);
     }
     throw e;
   } finally {
@@ -37,13 +37,7 @@ async function api(path, opts = {}) {
 }
 
 async function apiPost(path, body) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`API POST ${path} failed: ${res.status}`);
-  return res.json();
+  return apiWrite('POST', path, body);
 }
 
 async function apiPut(path, body) {
@@ -58,12 +52,14 @@ async function apiWrite(method, path, body) {
   const send = async () => {
     const headers = { 'Content-Type': 'application/json' };
     const adminKey = localStorage.getItem('aiq_admin_key');
+    const apiKey = localStorage.getItem('aiq_api_key');
     if (adminKey) headers['X-Admin-Key'] = adminKey;
+    if (apiKey) headers['X-API-Key'] = apiKey;
     return fetch(`${API_BASE}${path}`, { method, headers, body: JSON.stringify(body) });
   };
   let res = await send();
   if (res.status === 401) {
-    const key = window.prompt('Mothership admin key required. Paste AIQ_ADMIN_KEY:');
+    const key = window.prompt('Admin key required. Paste AIQ_ADMIN_KEY:');
     if (key) localStorage.setItem('aiq_admin_key', key.trim());
     res = await send();
   }
@@ -136,7 +132,7 @@ function switchView(view) {
     me: 'My Dashboard',
   };
   const kickers = {
-    overview: 'Org command center',
+    overview: 'Team usage and ROI',
     executive: 'Board-safe financial view',
     employees: 'Individual usage and coaching signals',
     training: 'Training modules by detected behavior',
@@ -144,7 +140,7 @@ function switchView(view) {
     projects: 'Project-level AI cost attribution',
     staffing: 'Capacity and staffing intelligence',
     rules: 'Detection logic and coaching rules',
-    me: 'Private employee self-view',
+    me: 'Personal usage and coaching',
   };
   document.getElementById('pageTitle').textContent = titles[view] || view;
   const kicker = document.getElementById('pageKicker');
@@ -242,7 +238,7 @@ async function renderOverview() {
 }
 
 function statCard(label, value, sub) {
-  return `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${value}</div><div class="stat-sub">${sub || ''}</div></div>`;
+  return `<div class="stat-card"><div class="stat-value">${value}</div><div class="stat-label">${label}</div><div class="stat-sub">${sub || ''}</div></div>`;
 }
 
 function distItem(label, count, cls) {
@@ -446,6 +442,7 @@ function employeeCard(emp) {
   `).join('');
 
   const flags = (emp.anti_patterns || []).slice(0, 4);
+  const empHarnesses = harnessBadges(emp.harness_usage);
   const flagBadges = flags.map(f => `<span class="flag-badge ${severityClass(f.severity)}">${esc(f.rule_name)}</span>`).join('');
 
   return `
@@ -458,6 +455,7 @@ function employeeCard(emp) {
         <div class="score-ring ${cls}">${overall.toFixed(0)}</div>
       </div>
       <div class="ec-scores">${scoreBars}</div>
+      ${empHarnesses}
       <div class="ec-stats">
         <div class="ec-stat"><div class="ec-stat-val">${fmtNum(m.total_requests)}</div><div class="ec-stat-label">Requests</div></div>
         <div class="ec-stat"><div class="ec-stat-val">${fmtNum(m.total_sessions)}</div><div class="ec-stat-label">Sessions</div></div>
@@ -542,6 +540,12 @@ async function openEmployeeModal(employeeId) {
       </div>
     `).join('');
 
+    const projectHarness = {};
+    for (const p of (emp.projects || [])) {
+      for (const [h, n] of Object.entries(p.harness_usage || {})) projectHarness[h] = (projectHarness[h] || 0) + Number(n || 0);
+    }
+    const employeeHarnessHTML = harnessBadges(projectHarness);
+
     const trainingHTML = training.length ? training.map(t => `
       <div class="rec-item">
         <span class="rec-priority ${t.priority}">${t.priority}</span>
@@ -576,6 +580,10 @@ async function openEmployeeModal(employeeId) {
       <div class="modal-section">
         <h3>Anti-Patterns Detected (${patterns.length})</h3>
         <div class="modal-patterns">${patternHTML}</div>
+      </div>
+      <div class="modal-section">
+        <h3>Agent Harness Usage</h3>
+        ${employeeHarnessHTML}
       </div>
       <div class="modal-section">
         <h3>Model Usage</h3>
@@ -857,6 +865,15 @@ function attachOrgDirectoryHandlers(container) {
     showToast('Client added');
     renderProjects();
   });
+  container.querySelector('.add-project-btn')?.addEventListener('click', async () => {
+    const name = container.querySelector('.new-project-name').value.trim();
+    if (!name) return showToast('Enter a project name');
+    const customer = container.querySelector('.new-project-customer')?.value.trim() || '';
+    const remote = container.querySelector('.new-project-remote')?.value.trim() || '';
+    await apiPost('/api/projects', { project_name: name, customer_name: customer, git_remote_url: remote });
+    showToast('Project added');
+    renderProjects();
+  });
 }
 
 function orgDirectoryPanel(directory) {
@@ -867,12 +884,18 @@ function orgDirectoryPanel(directory) {
   const clientRows = clients.slice(0, 8).map(c => `<div class="exec-row compact"><span>${esc(c.name)}</span><span>${c.projects || 0} projects</span><span>${fmtCost(c.cost_usd || 0)}</span></div>`).join('');
   return `<div class="card card-wide org-directory-card">
     <h3>Org Directory</h3>
-    <p class="muted-copy">Mothership keeps employees, teams, projects, and clients optional but editable. Edge collectors keep project membership fresh automatically; admins can correct names, teams, clients, and billing codes here.</p>
+    <p class="muted-copy">AIQ keeps employees, teams, projects, and clients optional but editable. Edge collectors keep project membership fresh automatically; admins can correct names, teams, clients, and billing codes here.</p>
     <div class="stat-cards compact-stats">
       ${statCard('Employees', employees.length, 'registered')}
       ${statCard('Teams', teams.length, 'optional')}
       ${statCard('Clients', clients.length, 'optional')}
-      ${statCard('Projects', (directory?.projects || []).length, 'auto-updated')}
+      ${statCard('Projects', (directory?.projects || []).length, 'assigned')}
+    </div>
+    <div class="org-edit-grid add-project-form project-create-form" style="margin-bottom:14px">
+      <label>Project Name<input class="filter-select new-project-name" placeholder="Payments API"></label>
+      <label>Customer Name<input class="filter-select new-project-customer" placeholder="Customer / internal org"></label>
+      <label>Git Remote URL<input class="filter-select new-project-remote" placeholder="git@github.com:org/repo.git or https://github.com/org/repo.git"></label>
+      <button class="btn btn-secondary add-project-btn">Add Project</button>
     </div>
     <div class="card-grid two-col">
       <div><h4>Teams</h4><div class="exec-table">${teamRows || emptyRow('No teams yet')}</div><div class="org-edit-grid add-team-form"><input class="filter-select new-team-name" placeholder="New team name"><button class="btn btn-secondary add-team-btn">Add Team</button></div></div>
@@ -898,8 +921,8 @@ function projectCard(p) {
       </div>
       <div class="pc-meta">
         ${team ? `<span class="pc-meta-item">Team: ${esc(team)}</span>` : ''}
-        ${p.client ? `<span class="pc-meta-item">Client: ${esc(p.client)}</span>` : ''}
-        <span class="pc-meta-item">Path: ${esc(p.project_path || '')}</span>
+        ${(p.customer_name || p.client) ? `<span class="pc-meta-item">Customer: ${esc(p.customer_name || p.client)}</span>` : ''}
+        <span class="pc-meta-item">Repo: ${esc(p.normalized_git_remote || 'untracked')}</span>
       </div>
       <div class="pc-stats">
         <div class="pc-stat"><div class="pc-stat-val">${fmtNum(p.total_requests)}</div><div class="pc-stat-label">Requests</div></div>
@@ -908,9 +931,16 @@ function projectCard(p) {
         <div class="pc-stat"><div class="pc-stat-val">${p.active_days || 0}</div><div class="pc-stat-label">Active Days</div></div>
       </div>
       <div class="pc-period">${fmtDate(p.first_activity)} to ${fmtDate(p.last_activity)}</div>
+      ${harnessBadges(p.harness_usage)}
       ${topWorkTypes ? `<div class="pc-work-types">${topWorkTypes}</div>` : ''}
     </div>
   `;
+}
+
+function harnessBadges(harnesses) {
+  const entries = Object.entries(harnesses || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+  if (!entries.length) return '<div class="harness-badges"><span class="harness-badge muted">no harness data</span></div>';
+  return `<div class="harness-badges">${entries.slice(0, 5).map(([h, n]) => `<span class="harness-badge">${esc(h)} <b>${fmtNum(n)}</b></span>`).join('')}</div>`;
 }
 
 // ── Project Detail Modal ───────────────────────────────
@@ -946,13 +976,15 @@ async function openProjectModal(projectId) {
       <div class="org-edit-grid" data-project-profile="${esc(p.project_id)}">
         <label>Project Name<input class="filter-select project-name-input" value="${esc(p.project_name || '')}" placeholder="Project name"></label>
         <label>Team<input class="filter-select project-team-input" value="${esc(team || '')}" placeholder="Owning team"></label>
-        <label>Client<input class="filter-select project-client-input" value="${esc(client || '')}" placeholder="Client / internal org"></label>
+        <label>Customer<input class="filter-select project-customer-input" value="${esc(p.customer_name || client || '')}" placeholder="Customer / internal org"></label>
+        <label>Git Remote URL<input class="filter-select project-remote-input" value="${esc(p.git_remote_url || '')}" placeholder="git@github.com:org/repo.git"></label>
         <label>Billing Code<input class="filter-select project-billing-input" value="${esc(billingCode || '')}" placeholder="Optional"></label>
         <button class="btn btn-secondary save-project-profile">Save Project</button>
       </div>
       <div class="project-meta-grid">
         ${metaItem('Team', team)}
-        ${metaItem('Client', client)}
+        ${metaItem('Customer', p.customer_name || client)}
+        ${metaItem('Git Remote', p.normalized_git_remote || p.git_remote_url || '')}
         ${metaItem('Billing Code', billingCode)}
         <div class="project-meta-item">
           <div class="pmi-label">Project Path</div>
@@ -972,7 +1004,24 @@ async function openProjectModal(projectId) {
       ['Files Edited', p.files_edited_count || 0],
     ].map(([l, v]) => statCard(l, v, '')).join('');
 
-    // Per-employee table
+    // Harness drilldown and per-employee table
+    const harnessMap = {};
+    for (const e of employees) {
+      const hs = e.harness_usage || p.harness_usage || {};
+      const entries = Object.entries(hs).length ? Object.entries(hs) : [['unknown', e.sessions || 0]];
+      for (const [h, n] of entries) {
+        if (!harnessMap[h]) harnessMap[h] = { sessions: 0, employees: [] };
+        harnessMap[h].sessions += Number(n || 0);
+        harnessMap[h].employees.push(e);
+      }
+    }
+    const harnessHTML = Object.entries(harnessMap).sort((a, b) => b[1].sessions - a[1].sessions).map(([h, info]) => `
+      <details class="harness-drilldown" open>
+        <summary><span>${esc(h)}</span><b>${fmtNum(info.sessions)} sessions</b><small>${info.employees.length} employees</small></summary>
+        <div class="staff-table compact-table">
+          ${info.employees.slice(0, 12).map(e => `<div class="staff-row"><span>${esc(e.employee_name || e.employee_id)}</span><span>${esc(e.team || '—')}</span><span>${fmtNum(e.requests || 0)} req</span><span>${fmtCost(e.cost_usd)}</span></div>`).join('')}
+        </div>
+      </details>`).join('') || emptyState('No harness data');
     const sortedEmps = [...employees].sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0));
     const empRows = sortedEmps.length ? sortedEmps.map(e => `
       <tr>
@@ -1031,6 +1080,10 @@ async function openProjectModal(projectId) {
         <div class="stat-cards">${statCards}</div>
       </div>
       <div class="modal-section">
+        <h3>Agent Harness Drilldown</h3>
+        ${harnessHTML}
+      </div>
+      <div class="modal-section">
         <h3>Employee Breakdown (${employees.length})</h3>
         <table class="proj-emp-table">
           <thead><tr>
@@ -1060,7 +1113,9 @@ async function openProjectModal(projectId) {
       await apiPatch(`/api/projects/${encodeURIComponent(p.project_id)}`, {
         project_name: box.querySelector('.project-name-input').value.trim(),
         team: box.querySelector('.project-team-input').value.trim(),
-        client: box.querySelector('.project-client-input').value.trim(),
+        customer_name: box.querySelector('.project-customer-input').value.trim(),
+        client: box.querySelector('.project-customer-input').value.trim(),
+        git_remote_url: box.querySelector('.project-remote-input').value.trim(),
         billing_code: box.querySelector('.project-billing-input').value.trim(),
       });
       showToast('Project updated');
@@ -1079,24 +1134,31 @@ async function renderRules() {
   try {
     allRules = await api('/api/rules');
     const container = document.getElementById('rulesList');
-    container.innerHTML = allRules.map(r => `
-      <div class="rule-card ${r.enabled === false ? 'rule-disabled' : ''}">
-        <div class="rc-info">
-          <h4>${esc(r.name)}</h4>
-          <p>${esc(r.description)}</p>
-          <div class="rc-suggestion">Suggestion: ${esc(r.suggestion)}</div>
-        </div>
-        <div class="rc-meta rule-controls" data-rule="${esc(r.id)}">
-          <span class="rc-group">${esc(r.group)}</span>
-          <span class="flag-badge ${severityClass(r.severity)}">${r.severity}</span>
-          <label class="rule-toggle"><input type="checkbox" class="rule-enabled-input" ${r.enabled !== false ? 'checked' : ''}> enabled</label>
-          <select class="filter-select rule-severity-input">
-            ${['high','medium','low'].map(s => `<option value="${s}" ${s === r.severity ? 'selected' : ''}>${s}</option>`).join('')}
-          </select>
-          <button class="btn btn-secondary save-rule-btn">Save</button>
-        </div>
+    const verdict = { keep: 'Keep', watch: 'Review', off: 'Off by default' };
+    container.innerHTML = `
+      <div class="card card-wide rules-audit-note">
+        <h3>Rule basis</h3>
+        <p>Rules now favor observable engineering behaviors: context quality, human verification, runaway loops, cancellation/rework, and plan pressure. Lifestyle or weak proxy signals are off by default.</p>
       </div>
-    `).join('');
+      ${allRules.map(r => `
+        <div class="rule-card ${r.enabled === false ? 'rule-disabled' : ''}">
+          <div class="rc-info">
+            <div class="rc-title-row"><h4>${esc(r.name)}</h4><span class="rc-verdict ${esc(r.audit_status || 'keep')}">${verdict[r.audit_status] || 'Keep'}</span></div>
+            <p>${esc(r.description)}</p>
+            <div class="rc-suggestion">${esc(r.suggestion)}</div>
+            <div class="rc-basis">Basis: ${esc(r.basis || 'Observable log signal')}</div>
+          </div>
+          <div class="rc-meta rule-controls" data-rule="${esc(r.id)}">
+            <span class="rc-group">${esc(r.group)}</span>
+            <span class="flag-badge ${severityClass(r.severity)}">${r.severity}</span>
+            <label class="rule-toggle"><input type="checkbox" class="rule-enabled-input" ${r.enabled !== false ? 'checked' : ''}> enabled</label>
+            <select class="filter-select rule-severity-input">
+              ${['high','medium','low'].map(s => `<option value="${s}" ${s === r.severity ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+            <button class="btn btn-secondary save-rule-btn">Save</button>
+          </div>
+        </div>
+      `).join('')}`;
     container.querySelectorAll('.save-rule-btn').forEach(btn => btn.addEventListener('click', async (e) => {
       const box = e.target.closest('.rule-controls');
       await apiPut(`/api/rules/${encodeURIComponent(box.dataset.rule)}`, {
@@ -1139,7 +1201,7 @@ async function renderMe() {
   }
 
   showLoading(true);
-  container.innerHTML = `<div class="card card-wide"><h3>Loading your dashboard…</h3><p style="color:var(--text-dim)">Checking <code>/api/me</code>. If this takes more than a few seconds, verify the mothership is running and your API key is correct.</p></div>`;
+  container.innerHTML = `<div class="card card-wide"><h3>Loading your dashboard…</h3><p style="color:var(--text-dim)">Checking <code>/api/me</code>. If this takes more than a few seconds, verify the AIQ server is running and your API key is correct.</p></div>`;
   try {
     const emp = await api('/api/me', { timeoutMs: 12000 });
     const summary = emp.summary || {};
@@ -1164,21 +1226,29 @@ async function renderMe() {
       const v = typeof val === 'object' ? val?.score : val;
       return `<div class="modal-score-card"><div class="ms-label">${label}</div><div class="ms-value" style="color:${scoreColor(v || 0)}">${(v || 0).toFixed(0)}</div></div>`;
     }).join('');
+    const projectHarness = {};
+    for (const p of (emp.projects || [])) {
+      for (const [h, n] of Object.entries(p.harness_usage || {})) projectHarness[h] = (projectHarness[h] || 0) + Number(n || 0);
+    }
+    const employeeHarnessHTML = harnessBadges(projectHarness);
+
     const trainingHTML = training.length ? training.map(t => `
       <div class="rec-item"><span class="rec-priority ${t.priority}">${t.priority}</span><div class="rec-content"><div class="rec-track">${esc(t.track)}</div><div class="rec-module">${esc(t.module)}</div></div></div>
     `).join('') : '<div style="color:var(--text-dim);padding:12px">No training needed</div>';
     const patternHTML = patterns.length ? patterns.slice(0, 8).map(p => `
       <div class="modal-pattern ${severityClass(p.severity)}"><div class="mp-header"><span class="mp-name">${esc(p.rule_name)}</span><span class="mp-stats">${p.occurrences} · ${p.severity}</span></div><div class="mp-desc">${esc(p.description || '')}</div></div>
     `).join('') : '<div style="color:var(--text-dim);padding:12px">No anti-patterns detected</div>';
+    const assignable = emp.assignable_projects || [];
+    const projectOptions = '<option value="">Other Usage</option>' + assignable.map(x => `<option value="${esc(x.project_id)}">${esc(x.project_name)}</option>`).join('');
     const projectHTML = myProjects.length ? `<div class="staff-table project-staffing">
-      <div class="staff-row header"><span>Project</span><span>Team</span><span>Req</span><span>Cost</span><span>AI LOC</span><span>Your role</span></div>
-      ${myProjects.map(p => `<div class="staff-row">
-        <span>${esc(p.project_name)}</span>
-        <span>${esc(p.team || '—')}</span>
+      <div class="staff-row header"><span>Detected usage</span><span>Assigned to</span><span>Req</span><span>Cost</span><span>AI LOC</span><span>Save</span></div>
+      ${myProjects.map(p => `<div class="staff-row project-assign-row" data-detected="${esc(p.detected_project_id || p.project_id)}">
+        <span>${esc(p.detected_project_name || p.project_name)}</span>
+        <span><select class="filter-select assign-project-select">${projectOptions.replace(`value="${esc(p.project_id)}"`, `value="${esc(p.project_id)}" selected`)}</select></span>
         <span>${fmtNum(p.requests || 0)}</span>
         <span class="money">${fmtCost(p.cost_usd)}</span>
         <span>${fmtNum(p.ai_loc || 0)}</span>
-        <span class="staff-rec">${p.project_people || 1} contributor${(p.project_people || 1) !== 1 ? 's' : ''} · ${p.active_days || 0} active days</span>
+        <span><button class="btn btn-secondary save-project-assignment">Save</button></span>
       </div>`).join('')}
     </div>` : emptyState('No project-level activity found yet.');
     const planFitHTML = `
@@ -1199,7 +1269,7 @@ async function renderMe() {
         <div class="project-meta-item"><div class="pmi-label">Plan Source</div><div class="pmi-value">${esc(planSource)}</div></div>
       </div>
       ${planIdentityHTML(planContext, costInfo)}
-      <div class="unassigned-note">Detected provider: ${esc(planInference.provider || 'unknown')} (${esc(planInference.confidence || 'none')}). The harness cannot reliably know your paid plan or enterprise rolling-window allowance. Configure locally with <code>aiq config --plan-type &lt;plan_id&gt; --plan-name "&lt;Plan Name&gt;" --rolling-window-usd &lt;amount&gt;</code>, or ask an admin to set it in Mothership → Plan Recommendations.</div>`;
+      <div class="unassigned-note">Detected provider: ${esc(planInference.provider || 'unknown')} (${esc(planInference.confidence || 'none')}). The harness cannot reliably know your paid plan or enterprise rolling-window allowance. Configure locally with <code>aiq config --plan-type &lt;plan_id&gt; --plan-name "&lt;Plan Name&gt;" --rolling-window-usd &lt;amount&gt;</code>, or ask an admin to set it under Plan Recommendations.</div>`;
 
     container.innerHTML = `
       <div class="stat-cards">
@@ -1218,13 +1288,19 @@ async function renderMe() {
       </div>
       <button class="btn btn-secondary" id="clearMeApiKey" style="margin-top:18px">Clear saved API key</button>
     `;
+    document.querySelectorAll('.save-project-assignment').forEach(btn => btn.addEventListener('click', async (e) => {
+      const row = e.target.closest('.project-assign-row');
+      await apiPut(`/api/me/projects/${encodeURIComponent(row.dataset.detected)}`, { project_id: row.querySelector('.assign-project-select').value });
+      showToast('Project assignment saved');
+      renderMe();
+    }));
     document.getElementById('clearMeApiKey').addEventListener('click', () => {
       localStorage.removeItem('aiq_api_key');
       renderMe();
     });
   } catch (e) {
     const isAuth = String(e.message || '').includes('401');
-    container.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Could not load personal dashboard</h3><p>${esc(e.message)}</p><div style="text-align:left;max-width:680px;margin:16px auto;color:var(--text-dim);line-height:1.7"><strong>Fix checklist:</strong><br>1. Make sure the mothership terminal is still running: <code>python scripts/aiq-mothership.py health --server-url ${esc(API_BASE)}</code><br>2. Make sure you registered: <code>aiq register --server-url ${esc(API_BASE)} --invite-code &lt;code&gt; --employee-id &lt;you&gt;</code><br>3. Run one collection: <code>aiq collect</code><br>4. Paste the <code>api_key</code> from <code>~/.aiq/config.toml</code> here again.${isAuth ? '<br><strong>The saved key looks invalid or belongs to another mothership.</strong>' : ''}</div><button class="btn btn-secondary" id="clearBadApiKey">Clear key</button></div>`;
+    container.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Could not load personal dashboard</h3><p>${esc(e.message)}</p><div style="text-align:left;max-width:680px;margin:16px auto;color:var(--text-dim);line-height:1.7"><strong>Fix checklist:</strong><br>1. Make sure the AIQ server terminal is still running: <code>python scripts/aiq-mothership.py health --server-url ${esc(API_BASE)}</code><br>2. Make sure you registered: <code>aiq register --server-url ${esc(API_BASE)} --invite-code &lt;code&gt; --employee-id &lt;you&gt;</code><br>3. Run one collection: <code>aiq collect</code><br>4. Paste the <code>api_key</code> from <code>~/.aiq/config.toml</code> here again.${isAuth ? '<br><strong>The saved key looks invalid or belongs to another mothership.</strong>' : ''}</div><button class="btn btn-secondary" id="clearBadApiKey">Clear key</button></div>`;
     document.getElementById('clearBadApiKey').addEventListener('click', () => {
       localStorage.removeItem('aiq_api_key');
       renderMe();
@@ -1274,17 +1350,15 @@ document.addEventListener('DOMContentLoaded', () => {
     window.history.replaceState({}, '', clean);
   }
 
-  // Dashboard split: mothership admin at /, employee-only self dashboard at /me.
+  // Dashboard split: admin at /, employee-only self dashboard at /me.
   document.body.classList.toggle('employee-dashboard-mode', IS_EMPLOYEE_DASHBOARD);
   document.body.classList.toggle('admin-dashboard-mode', !IS_EMPLOYEE_DASHBOARD);
   document.querySelectorAll('.nav-item').forEach(item => {
     if (IS_EMPLOYEE_DASHBOARD && item.dataset.view !== 'me') item.remove();
     if (!IS_EMPLOYEE_DASHBOARD && item.dataset.view === 'me') item.remove();
   });
-  document.querySelector('.logo-sub').textContent = IS_EMPLOYEE_DASHBOARD ? 'Employee Dashboard' : 'Mothership';
-  const modeChip = document.getElementById('dashboardModeChip');
-  if (modeChip) modeChip.textContent = IS_EMPLOYEE_DASHBOARD ? 'Employee View' : 'Mothership';
-  document.title = IS_EMPLOYEE_DASHBOARD ? 'AIQ Employee Dashboard' : 'AIQ Mothership Dashboard';
+  document.querySelector('.logo-sub').textContent = IS_EMPLOYEE_DASHBOARD ? 'Personal' : 'Admin';
+  document.title = IS_EMPLOYEE_DASHBOARD ? 'AIQ Personal Dashboard' : 'AIQ Admin Dashboard';
 
   // Nav switching
   document.querySelectorAll('.nav-item').forEach(item => {

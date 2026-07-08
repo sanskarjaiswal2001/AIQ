@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 import secrets
 import sqlite3
@@ -179,6 +180,9 @@ CREATE TABLE IF NOT EXISTS projects (
     project_path TEXT,
     team TEXT,
     client TEXT,
+    customer_name TEXT,
+    git_remote_url TEXT,
+    normalized_git_remote TEXT,
     billing_code TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -202,6 +206,9 @@ CREATE TABLE IF NOT EXISTS project_snapshots (
     work_types_json TEXT,
     git_branches_json TEXT,
     files_edited_count INTEGER,
+    git_remote_url TEXT,
+    normalized_git_remote TEXT,
+    harness_usage_json TEXT,
     FOREIGN KEY (project_id) REFERENCES projects(project_id),
     FOREIGN KEY (employee_id) REFERENCES employees(id),
     FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
@@ -210,6 +217,16 @@ CREATE TABLE IF NOT EXISTS project_snapshots (
 CREATE INDEX IF NOT EXISTS idx_proj_snap_project ON project_snapshots(project_id);
 CREATE INDEX IF NOT EXISTS idx_proj_snap_employee ON project_snapshots(employee_id);
 CREATE INDEX IF NOT EXISTS idx_proj_snap_snapshot ON project_snapshots(snapshot_id);
+
+CREATE TABLE IF NOT EXISTS project_assignments (
+    employee_id TEXT NOT NULL,
+    detected_project_id TEXT NOT NULL,
+    assigned_project_id TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (employee_id, detected_project_id),
+    FOREIGN KEY (employee_id) REFERENCES employees(id),
+    FOREIGN KEY (assigned_project_id) REFERENCES projects(project_id)
+);
 
 CREATE TABLE IF NOT EXISTS rule_overrides (
     rule_id TEXT PRIMARY KEY,
@@ -232,12 +249,33 @@ def init_db() -> None:
     with db() as conn:
         conn.executescript(SCHEMA_SQL)
         _ensure_column(conn, "employees", "email", "TEXT")
+        _ensure_column(conn, "projects", "is_manual", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "projects", "customer_name", "TEXT")
+        _ensure_column(conn, "projects", "git_remote_url", "TEXT")
+        _ensure_column(conn, "projects", "normalized_git_remote", "TEXT")
+        _ensure_column(conn, "project_snapshots", "git_remote_url", "TEXT")
+        _ensure_column(conn, "project_snapshots", "normalized_git_remote", "TEXT")
+        _ensure_column(conn, "project_snapshots", "harness_usage_json", "TEXT")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in cols:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def normalize_git_remote_url(url: str | None) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    raw = raw.replace("git+", "")
+    raw = re.sub(r"^[a-z]+://", "", raw, flags=re.IGNORECASE)
+    raw = raw.replace("git@", "")
+    raw = raw.replace(":", "/", 1) if re.match(r"^[^/]+:[^/]+/", raw) else raw
+    raw = raw.split("?", 1)[0].split("#", 1)[0].strip("/")
+    if raw.endswith(".git"):
+        raw = raw[:-4]
+    return raw.lower()
 
 
 def _norm_project_name(name: str | None) -> str:
@@ -488,6 +526,7 @@ def list_employees(team: str | None = None) -> list[dict[str, Any]]:
             period_start = None
             period_end = None
             anti_patterns: list[dict[str, Any]] = []
+            harness_usage: dict[str, int] = {}
             if snap:
                 latest_snapshot = snap["uploaded_at"]
                 period_start = snap["period_start"]
@@ -522,6 +561,9 @@ def list_employees(team: str | None = None) -> list[dict[str, Any]]:
                         "score_context_management": mrow["score_context_management"],
                         "overall_score": mrow["overall_score"],
                     }
+                for hr in conn.execute("SELECT harness_usage_json FROM project_snapshots WHERE snapshot_id = ?", (snap["id"],)).fetchall():
+                    for hk, hv in (json.loads(hr["harness_usage_json"] or "{}")).items():
+                        harness_usage[hk] = harness_usage.get(hk, 0) + int(hv or 0)
                 ap_row = conn.execute(
                     "SELECT COUNT(*) AS c, "
                     "SUM(CASE WHEN severity='high' AND triggered=1 THEN 1 ELSE 0 END) AS h "
@@ -563,6 +605,7 @@ def list_employees(team: str | None = None) -> list[dict[str, Any]]:
                     "anti_patterns_count": ap_count,
                     "high_severity_count": high_count,
                     "anti_patterns": anti_patterns if snap else [],
+                    "harness_usage": harness_usage,
                 }
             )
         return results
@@ -694,13 +737,13 @@ def ingest_snapshot(payload: dict[str, Any]) -> int:
             ).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE projects SET project_name = COALESCE(project_name, ?), project_path = COALESCE(project_path, ?) WHERE project_id = ?",
-                    (pname, proj.get("project_path"), pid),
+                    "UPDATE projects SET project_name = COALESCE(project_name, ?), project_path = COALESCE(project_path, ?), git_remote_url = COALESCE(git_remote_url, ?), normalized_git_remote = COALESCE(normalized_git_remote, ?) WHERE project_id = ?",
+                    (pname, proj.get("project_path"), proj.get("git_remote_url"), normalize_git_remote_url(proj.get("git_remote_url") or proj.get("normalized_git_remote")), pid),
                 )
             else:
                 conn.execute(
-                    "INSERT INTO projects (project_id, project_name, project_path) VALUES (?, ?, ?)",
-                    (pid, pname, proj.get("project_path")),
+                    "INSERT INTO projects (project_id, project_name, project_path, git_remote_url, normalized_git_remote, is_manual) VALUES (?, ?, ?, ?, ?, 0)",
+                    (pid, pname, proj.get("project_path"), proj.get("git_remote_url"), normalize_git_remote_url(proj.get("git_remote_url") or proj.get("normalized_git_remote"))),
                 )
 
             conn.execute(
@@ -709,8 +752,9 @@ def ingest_snapshot(payload: dict[str, Any]) -> int:
                     project_id, employee_id, snapshot_id, sessions, requests,
                     ai_loc, user_loc, input_tokens, output_tokens, estimated_cost_usd,
                     first_activity, last_activity, active_days,
-                    model_usage_json, work_types_json, git_branches_json, files_edited_count
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    model_usage_json, work_types_json, git_branches_json, files_edited_count,
+                    git_remote_url, normalized_git_remote, harness_usage_json
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     pid, employee_id, snapshot_id,
@@ -724,6 +768,9 @@ def ingest_snapshot(payload: dict[str, Any]) -> int:
                     json.dumps(proj.get("work_types") or {}),
                     json.dumps(proj.get("git_branches") or []),
                     proj.get("files_edited_count", 0),
+                    proj.get("git_remote_url"),
+                    normalize_git_remote_url(proj.get("git_remote_url") or proj.get("normalized_git_remote")),
+                    json.dumps(proj.get("harness_usage") or {}),
                 ),
             )
 
@@ -1126,6 +1173,55 @@ def count_employees() -> int:
 # ---------------------------------------------------------------------------
 
 
+def create_project(project_id: str, project_name: str, team: str | None = None, client: str | None = None, billing_code: str | None = None, git_remote_url: str | None = None, customer_name: str | None = None) -> dict[str, Any]:
+    """Create an admin-defined project keyed by normalized git remote URL."""
+    normalized_remote = normalize_git_remote_url(git_remote_url)
+    pid = normalized_remote or _norm_project_name(project_id or project_name)
+    if not pid:
+        raise ValueError("project name required")
+    with db() as conn:
+        _maybe_upsert_team(conn, team)
+        _maybe_upsert_client(conn, client)
+        conn.execute(
+            """
+            INSERT INTO projects (project_id, project_name, team, client, customer_name, git_remote_url, normalized_git_remote, billing_code, is_manual)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(project_id) DO UPDATE SET
+                project_name=excluded.project_name, team=excluded.team,
+                client=excluded.client, customer_name=excluded.customer_name,
+                git_remote_url=excluded.git_remote_url, normalized_git_remote=excluded.normalized_git_remote,
+                billing_code=excluded.billing_code, is_manual=1
+            """,
+            (pid, project_name, team, client or customer_name, customer_name or client, git_remote_url, normalized_remote, billing_code),
+        )
+        return {"project_id": pid, "project_name": project_name, "team": team, "client": client or customer_name, "customer_name": customer_name or client, "git_remote_url": git_remote_url, "billing_code": billing_code}
+
+
+def set_project_assignment(employee_id: str, detected_project_id: str, assigned_project_id: str | None) -> None:
+    """Map one employee's detected folder/project to an admin project, or Other Usage."""
+    with db() as conn:
+        if assigned_project_id:
+            exists = conn.execute("SELECT 1 FROM projects WHERE project_id = ?", (assigned_project_id,)).fetchone()
+            if not exists:
+                raise ValueError("unknown project")
+        conn.execute(
+            """
+            INSERT INTO project_assignments (employee_id, detected_project_id, assigned_project_id, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(employee_id, detected_project_id) DO UPDATE SET
+                assigned_project_id=excluded.assigned_project_id, updated_at=CURRENT_TIMESTAMP
+            """,
+            (employee_id, detected_project_id, assigned_project_id or None),
+        )
+
+
+def list_manual_projects() -> list[dict[str, Any]]:
+    with db() as conn:
+        return [_row_to_dict(r) for r in conn.execute(
+            "SELECT project_id, project_name, team, client, customer_name, git_remote_url, normalized_git_remote, billing_code FROM projects WHERE is_manual = 1 ORDER BY project_name"
+        ).fetchall()]
+
+
 def get_all_projects() -> list[dict[str, Any]]:
     """Return all projects with cross-employee aggregated stats from latest snapshots.
 
@@ -1142,7 +1238,17 @@ def get_all_projects() -> list[dict[str, Any]]:
             """
         ).fetchall()
         if not latest_snapshots:
-            return []
+            return [{
+                "project_id": r["project_id"], "project_name": r["project_name"], "project_path": r["project_path"],
+                "team": r["team"], "client": r["client"], "customer_name": r["customer_name"],
+                "git_remote_url": r["git_remote_url"], "normalized_git_remote": r["normalized_git_remote"],
+                "billing_code": r["billing_code"], "harness_usage": {},
+                "employees": [], "total_sessions": 0, "total_requests": 0, "total_ai_loc": 0,
+                "total_user_loc": 0, "total_input_tokens": 0, "total_output_tokens": 0,
+                "total_cost_usd": 0.0, "estimated_token_cost_usd": 0.0, "cost_label": "Billed Plan Spend",
+                "first_activity": "", "last_activity": "", "active_days": 0, "files_edited_count": 0,
+                "model_usage": {}, "work_types": {},
+            } for r in conn.execute("SELECT * FROM projects WHERE is_manual = 1 ORDER BY project_name").fetchall()]
 
         snap_ids = [r["snapshot_id"] for r in latest_snapshots]
         placeholders = ",".join("?" * len(snap_ids))
@@ -1170,17 +1276,26 @@ def get_all_projects() -> list[dict[str, Any]]:
 
         rows = conn.execute(
             f"""
-            SELECT ps.project_id, p.project_name, p.project_path, p.team, p.client, p.billing_code,
+            SELECT COALESCE(pa.assigned_project_id, mp.project_id, 'other') AS rollup_project_id,
+                   COALESCE(ap.project_name, mp.project_name, 'Other / Untracked') AS rollup_project_name,
+                   COALESCE(ap.project_path, mp.project_path) AS rollup_project_path,
+                   COALESCE(ap.team, mp.team) AS rollup_team, COALESCE(ap.client, mp.client) AS rollup_client, COALESCE(ap.customer_name, mp.customer_name) AS rollup_customer_name,
+                   COALESCE(ap.git_remote_url, mp.git_remote_url) AS rollup_git_remote_url, COALESCE(ap.normalized_git_remote, mp.normalized_git_remote) AS rollup_normalized_git_remote,
+                   COALESCE(ap.billing_code, mp.billing_code) AS rollup_billing_code,
+                   ps.project_id AS detected_project_id, p.project_name AS detected_project_name, p.project_path AS detected_project_path,
                    ps.employee_id, ps.sessions, ps.requests, ps.ai_loc, ps.user_loc,
                    ps.input_tokens, ps.output_tokens, ps.estimated_cost_usd,
                    ps.first_activity, ps.last_activity, ps.active_days,
-                   ps.model_usage_json, ps.work_types_json, ps.git_branches_json, ps.files_edited_count,
+                   ps.model_usage_json, ps.work_types_json, ps.git_branches_json, ps.files_edited_count, ps.harness_usage_json,
                    e.name AS employee_name, e.email AS employee_email, e.team AS employee_team
             FROM project_snapshots ps
             JOIN projects p ON p.project_id = ps.project_id
             JOIN employees e ON e.id = ps.employee_id
+            LEFT JOIN project_assignments pa ON pa.employee_id = ps.employee_id AND pa.detected_project_id = ps.project_id
+            LEFT JOIN projects ap ON ap.project_id = pa.assigned_project_id
+            LEFT JOIN projects mp ON mp.is_manual = 1 AND mp.normalized_git_remote != '' AND mp.normalized_git_remote = ps.normalized_git_remote
             WHERE ps.snapshot_id IN ({placeholders})
-            ORDER BY ps.project_id, ps.estimated_cost_usd DESC
+            ORDER BY rollup_project_id, ps.estimated_cost_usd DESC
             """,
             snap_ids,
         ).fetchall()
@@ -1188,15 +1303,19 @@ def get_all_projects() -> list[dict[str, Any]]:
         # Group by project_id, aggregating across employees
         projects_map: dict[str, dict[str, Any]] = {}
         for r in rows:
-            pid = r["project_id"]
+            pid = r["rollup_project_id"]
             if pid not in projects_map:
                 projects_map[pid] = {
                     "project_id": pid,
-                    "project_name": r["project_name"],
-                    "project_path": r["project_path"],
-                    "team": r["team"],
-                    "client": r["client"],
-                    "billing_code": r["billing_code"],
+                    "project_name": r["rollup_project_name"],
+                    "project_path": r["rollup_project_path"],
+                    "team": r["rollup_team"],
+                    "client": r["rollup_client"],
+                    "customer_name": r["rollup_customer_name"],
+                    "git_remote_url": r["rollup_git_remote_url"],
+                    "normalized_git_remote": r["rollup_normalized_git_remote"],
+                    "billing_code": r["rollup_billing_code"],
+                    "harness_usage": {},
                     "employees": [],
                     "total_sessions": 0,
                     "total_requests": 0,
@@ -1222,6 +1341,7 @@ def get_all_projects() -> list[dict[str, Any]]:
                 if employee_token_cost > 0
                 else employee_display_cost
             )
+            row_harness_usage = json.loads(r["harness_usage_json"] or "{}")
             proj["employees"].append({
                 "employee_id": r["employee_id"],
                 "employee_name": r["employee_name"],
@@ -1233,7 +1353,13 @@ def get_all_projects() -> list[dict[str, Any]]:
                 "cost_usd": round(project_display_cost, 2),
                 "estimated_token_cost_usd": round(project_token_cost, 4),
                 "active_days": r["active_days"],
+                "detected_project_id": r["detected_project_id"],
+                "detected_project_name": r["detected_project_name"],
+                "detected_project_path": r["detected_project_path"],
+                "harness_usage": row_harness_usage,
             })
+            for hk, hv in row_harness_usage.items():
+                proj["harness_usage"][hk] = proj["harness_usage"].get(hk, 0) + hv
             proj["total_sessions"] += r["sessions"] or 0
             proj["total_requests"] += r["requests"] or 0
             proj["total_ai_loc"] += r["ai_loc"] or 0
@@ -1267,6 +1393,20 @@ def get_all_projects() -> list[dict[str, Any]]:
             for k, v in (json.loads(r["work_types_json"] or "{}")).items():
                 proj["work_types"][k] = proj["work_types"].get(k, 0) + v
 
+        for mp in conn.execute("SELECT * FROM projects WHERE is_manual = 1").fetchall():
+            pid = mp["project_id"]
+            projects_map.setdefault(pid, {
+                "project_id": pid, "project_name": mp["project_name"], "project_path": mp["project_path"],
+                "team": mp["team"], "client": mp["client"], "customer_name": mp["customer_name"],
+                "git_remote_url": mp["git_remote_url"], "normalized_git_remote": mp["normalized_git_remote"],
+                "billing_code": mp["billing_code"], "harness_usage": {},
+                "employees": [], "total_sessions": 0, "total_requests": 0, "total_ai_loc": 0,
+                "total_user_loc": 0, "total_input_tokens": 0, "total_output_tokens": 0,
+                "total_cost_usd": 0.0, "estimated_token_cost_usd": 0.0, "cost_label": "Billed Plan Spend",
+                "first_activity": "", "last_activity": "", "active_days": 0, "files_edited_count": 0,
+                "model_usage": {}, "work_types": {},
+            })
+
         result = list(projects_map.values())
         for p in result:
             p["total_cost_usd"] = round(float(p.get("total_cost_usd") or 0), 2)
@@ -1284,8 +1424,8 @@ def get_project_detail(project_id: str) -> dict[str, Any] | None:
     return None
 
 
-def update_project_metadata(project_id: str, team: str | None = None, client: str | None = None, billing_code: str | None = None, project_name: str | None = None) -> bool:
-    """Admin-update of project metadata (name, team, client, billing code)."""
+def update_project_metadata(project_id: str, team: str | None = None, client: str | None = None, billing_code: str | None = None, project_name: str | None = None, git_remote_url: str | None = None, customer_name: str | None = None) -> bool:
+    """Admin-update of project metadata and git remote identity."""
     with db() as conn:
         existing = conn.execute("SELECT project_id FROM projects WHERE project_id = ?", (project_id,)).fetchone()
         if not existing:
@@ -1303,6 +1443,16 @@ def update_project_metadata(project_id: str, team: str | None = None, client: st
         if client is not None:
             updates.append("client = ?")
             params.append(client)
+        if customer_name is not None:
+            updates.append("customer_name = ?")
+            params.append(customer_name)
+            updates.append("client = ?")
+            params.append(customer_name)
+        if git_remote_url is not None:
+            updates.append("git_remote_url = ?")
+            params.append(git_remote_url)
+            updates.append("normalized_git_remote = ?")
+            params.append(normalize_git_remote_url(git_remote_url))
         if billing_code is not None:
             updates.append("billing_code = ?")
             params.append(billing_code)

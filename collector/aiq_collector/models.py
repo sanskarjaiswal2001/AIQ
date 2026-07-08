@@ -177,6 +177,8 @@ class Session:
     workspace_name: str = ""
     workspace_id: str = ""
     workspace_path: str = ""           # decoded cwd / encoded-path
+    git_remote_url: str = ""           # canonical repo identity, if detectable
+    harness: str = "claude"            # claude | codex | opencode | cursor | copilot
     creation_date: str = ""
     last_message_date: str = ""
     version: str = ""
@@ -214,6 +216,8 @@ class Session:
             "workspace_name": self.workspace_name,
             "workspace_id": self.workspace_id,
             "workspace_path": self.workspace_path,
+            "git_remote_url": self.git_remote_url,
+            "harness": self.harness,
             "creation_date": self.creation_date,
             "last_message_date": self.last_message_date,
             "version": self.version,

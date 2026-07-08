@@ -11,7 +11,9 @@ Stdlib-only.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+from pathlib import Path
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -48,6 +50,53 @@ def classify_work_type(message: str) -> str:
             return label
     return "other"
 
+
+
+def normalize_git_remote_url(url: str | None) -> str:
+    """Normalize SSH/HTTPS git remotes to host/org/repo for project identity matching."""
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    raw = raw.replace("git+", "")
+    raw = re.sub(r"^[a-z]+://", "", raw, flags=re.IGNORECASE)
+    raw = raw.replace("git@", "")
+    raw = raw.replace(":", "/", 1) if re.match(r"^[^/]+:[^/]+/", raw) else raw
+    raw = raw.split("?", 1)[0].split("#", 1)[0].strip("/")
+    if raw.endswith(".git"):
+        raw = raw[:-4]
+    return raw.lower()
+
+
+def git_remote_from_workspace(path: str | None) -> str:
+    """Read .git/config from a workspace or parent folder without shelling out."""
+    if not path:
+        return ""
+    try:
+        cur = Path(os.path.expanduser(path)).resolve()
+    except OSError:
+        return ""
+    for base in [cur, *cur.parents]:
+        cfg = base / ".git" / "config"
+        if not cfg.exists():
+            continue
+        try:
+            text = cfg.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        in_origin = False
+        fallback = ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("["):
+                in_origin = stripped.lower() == '[remote "origin"]'
+                continue
+            if stripped.startswith("url") and "=" in stripped:
+                val = stripped.split("=", 1)[1].strip()
+                fallback = fallback or val
+                if in_origin:
+                    return val
+        return fallback
+    return ""
 
 # ---------------------------------------------------------------------------
 # Analyzer
@@ -146,16 +195,24 @@ class Analyzer:
             "work_types": Counter(),
             "git_branches": set(),
             "files_edited": set(),
+            "harness_usage": Counter(),
+            "git_remote_url": "",
+            "normalized_git_remote": "",
         })
 
         for s in sessions:
             ws_path = s.workspace_path or s.workspace_name or "unknown"
-            pid = self.project_id_from_path(ws_path)
+            remote_url = s.git_remote_url or git_remote_from_workspace(s.workspace_path)
+            normalized_remote = normalize_git_remote_url(remote_url)
+            pid = normalized_remote or self.project_id_from_path(ws_path)
             proj = projects[pid]
             proj["project_id"] = pid
             proj["project_name"] = s.workspace_name or "unknown"
             proj["project_path"] = ws_path
+            proj["git_remote_url"] = proj["git_remote_url"] or remote_url
+            proj["normalized_git_remote"] = proj["normalized_git_remote"] or normalized_remote
             proj["sessions"] += 1
+            proj["harness_usage"][s.harness or "unknown"] += 1
             proj["requests"] += s.request_count
             proj["ai_loc"] += s.total_ai_loc
             proj["user_loc"] += sum(r.user_loc for r in s.requests)
@@ -199,6 +256,9 @@ class Analyzer:
                 "work_types": dict(proj["work_types"]),
                 "git_branches": sorted(proj["git_branches"]),
                 "files_edited_count": len(proj["files_edited"]),
+                "git_remote_url": proj["git_remote_url"],
+                "normalized_git_remote": proj["normalized_git_remote"],
+                "harness_usage": dict(proj["harness_usage"]),
             })
         result.sort(key=lambda p: p["estimated_cost_usd"], reverse=True)
         return result

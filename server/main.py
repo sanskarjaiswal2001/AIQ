@@ -107,7 +107,7 @@ def _rules_with_overrides() -> list[dict[str, Any]]:
     for rule in all_rules():
         ov = overrides.get(rule["id"], {})
         rule["default_severity"] = rule.get("severity")
-        rule["enabled"] = ov.get("enabled", True)
+        rule["enabled"] = ov.get("enabled", rule.get("default_enabled", True))
         if ov.get("severity"):
             rule["severity"] = ov["severity"]
         rule["effective_severity"] = rule.get("severity")
@@ -133,7 +133,7 @@ def _infer_plan_context(detail_or_employee: dict[str, Any]) -> dict[str, Any]:
         "source": "inferred_from_model_usage" if provider != "unknown" else "not_inferred",
         "confidence": "tool-family-only" if provider != "unknown" else "none",
         "requires_confirmation": True,
-        "note": "Agent harness logs can identify provider/tool family, but not the paid enterprise plan, seat tier, or rolling-window allowance. Configure that in the mothership or collector.",
+        "note": "Agent harness logs can identify provider/tool family, but not the paid enterprise plan, seat tier, or rolling-window allowance. Configure that in AIQ admin or collector.",
     }
 
 
@@ -315,14 +315,21 @@ def _employee_detail_payload(employee_id: str) -> dict[str, Any] | None:
                     "project_name": p.get("project_name"),
                     "team": p.get("team") or pe.get("team"),
                     "client": p.get("client"),
+                    "customer_name": p.get("customer_name"),
+                    "git_remote_url": p.get("git_remote_url"),
+                    "harness_usage": p.get("harness_usage") or {},
                     "billing_code": p.get("billing_code"),
                     "sessions": pe.get("sessions") or 0,
                     "requests": pe.get("requests") or 0,
                     "ai_loc": pe.get("ai_loc") or 0,
                     "cost_usd": pe.get("cost_usd") or 0,
                     "active_days": pe.get("active_days") or 0,
+                    "detected_project_id": pe.get("detected_project_id"),
+                    "detected_project_name": pe.get("detected_project_name"),
+                    "detected_project_path": pe.get("detected_project_path"),
                     "project_total_cost_usd": p.get("total_cost_usd") or 0,
                     "project_people": len(p.get("employees") or []),
+                    "harness_usage": p.get("harness_usage") or {},
                 })
     employee_projects.sort(key=lambda p: p["cost_usd"], reverse=True)
     detail["projects"] = employee_projects
@@ -422,7 +429,23 @@ def my_detail(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -
     detail = _employee_detail_payload(employee_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found")
+    detail["assignable_projects"] = db.list_manual_projects()
     return detail
+
+
+@app.put("/api/me/projects/{detected_project_id}")
+def assign_my_project(
+    detected_project_id: str,
+    body: dict[str, Any] = Body(default_factory=dict),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict[str, Any]:
+    """Assign one detected folder/project to an admin project; empty means Other Usage."""
+    employee_id = _require_api_key(x_api_key)
+    try:
+        db.set_project_assignment(employee_id, detected_project_id, body.get("project_id") or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok"}
 
 
 @app.get("/api/employees/{employee_id}/history")
@@ -454,7 +477,7 @@ def update_rule(
     body: dict[str, Any] = Body(default_factory=dict),
     x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
 ) -> dict[str, Any]:
-    """Enable/disable a rule or override its severity from the mothership dashboard."""
+    """Enable/disable a rule or override its severity from the admin dashboard."""
     _require_admin(x_admin_key)
     known = {r["id"] for r in all_rules()}
     if rule_id not in known:
@@ -798,7 +821,23 @@ def projects_list() -> list[dict[str, Any]]:
     return db.get_all_projects()
 
 
-@app.get("/api/projects/{project_id}")
+@app.post("/api/projects")
+def create_project(body: dict[str, Any] = Body(...), x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+    """Create an admin-defined project employees can assign usage to."""
+    _require_admin(x_admin_key)
+    try:
+        return db.create_project(
+            body.get("project_id") or body.get("project_name") or body.get("name"),
+            body.get("project_name") or body.get("name"),
+            body.get("team"), body.get("client") or body.get("customer_name"), body.get("billing_code"),
+            git_remote_url=body.get("git_remote_url") or body.get("remote_url"),
+            customer_name=body.get("customer_name") or body.get("client"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/projects/{project_id:path}")
 def project_detail(project_id: str) -> dict[str, Any]:
     """Detail for one project with per-employee breakdown."""
     detail = db.get_project_detail(project_id)
@@ -807,7 +846,7 @@ def project_detail(project_id: str) -> dict[str, Any]:
     return detail
 
 
-@app.patch("/api/projects/{project_id}")
+@app.patch("/api/projects/{project_id:path}")
 def update_project(project_id: str, body: dict[str, Any] = Body(...)):
     """Admin-update project metadata (name, team, client, billing_code)."""
     ok = db.update_project_metadata(
@@ -816,6 +855,8 @@ def update_project(project_id: str, body: dict[str, Any] = Body(...)):
         team=body.get("team"),
         client=body.get("client"),
         billing_code=body.get("billing_code"),
+        git_remote_url=body.get("git_remote_url") or body.get("remote_url"),
+        customer_name=body.get("customer_name") or body.get("client"),
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Project not found")
