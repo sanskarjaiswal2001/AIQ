@@ -71,6 +71,18 @@ async function apiWrite(method, path, body) {
   return res.json();
 }
 
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem('aiq_theme', theme);
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = theme === 'light' ? 'Dark mode' : 'Light mode';
+}
+
+function initTheme() {
+  // ponytail: dark is the product default; only one persisted override.
+  setTheme(localStorage.getItem('aiq_theme') === 'light' ? 'light' : 'dark');
+}
+
 // ── Score helpers ──────────────────────────────────────
 function scoreClass(score) {
   if (score >= 80) return 'excellent';
@@ -1342,6 +1354,7 @@ async function checkServerStatus() {
 
 // ── Init ───────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   const params = new URLSearchParams(window.location.search);
   const keyFromUrl = params.get('api_key') || params.get('key');
   if (keyFromUrl && keyFromUrl.startsWith('ak_')) {
@@ -1376,6 +1389,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Refresh
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+  });
   document.getElementById('refreshBtn').addEventListener('click', () => renderView(currentView));
 
   // Filters
