@@ -647,7 +647,7 @@ async function openEmployeeModal(employeeId) {
         ${planHTML}
       </div>
     `;
-    body.querySelector('.save-employee-profile')?.addEventListener('click', async () => {
+    body.querySelector('.save-employee-profile')?.addEventListener('click', withErrorToast(async () => {
       const box = body.querySelector('[data-employee-profile]');
       await apiPut(`/api/employees/${encodeURIComponent(emp.employee_id)}`, {
         name: box.querySelector('.emp-name-input').value.trim(),
@@ -657,15 +657,15 @@ async function openEmployeeModal(employeeId) {
       allEmployees = [];
       showToast('Employee updated');
       openEmployeeModal(emp.employee_id);
-    });
-    body.querySelector('.delete-employee-profile')?.addEventListener('click', async () => {
+    }));
+    body.querySelector('.delete-employee-profile')?.addEventListener('click', withErrorToast(async () => {
       if (!window.confirm(`Permanently delete ${emp.name || emp.employee_id}? This removes all their snapshots, scores, and history.`)) return;
       await apiDelete(`/api/employees/${encodeURIComponent(emp.employee_id)}`);
       allEmployees = [];
       showToast('Employee deleted');
       document.getElementById('employeeModal').classList.remove('active');
       renderEmployees();
-    });
+    }));
   } catch (e) {
     console.error('Modal error:', e);
     body.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Failed to load</h3><p>${esc(e.message)}</p></div>`;
@@ -779,7 +779,7 @@ async function renderPlans() {
     container.innerHTML = `
       <div class="card card-wide"><h3>Employee Plan Configuration</h3><p class="muted-copy">Configure confirmed paid plans here. AIQ can infer provider/tool family from harness/model names, but cannot safely infer enterprise seat tier or rolling-window limits from local logs.</p>${planRows || emptyState('No employees yet')}</div>
       <div class="card card-wide"><h3>Plan Recommendations</h3>${recHTML}</div>`;
-    container.querySelectorAll('.save-plan-btn').forEach(btn => btn.addEventListener('click', async (e) => {
+    container.querySelectorAll('.save-plan-btn').forEach(btn => btn.addEventListener('click', withErrorToast(async (e) => {
       const form = e.target.closest('.plan-config-form');
       const employeeId = form.dataset.employee;
       const planId = form.querySelector('.plan-id-input').value;
@@ -802,7 +802,7 @@ async function renderPlans() {
       allEmployees = [];
       showToast('Plan saved');
       renderPlans();
-    }));
+    })));
   } catch (e) {
     console.error('Plans error:', e);
     showToast('Failed to load plans: ' + e.message);
@@ -905,35 +905,49 @@ async function renderProjects() {
 }
 
 function attachOrgDirectoryHandlers(container) {
-  container.querySelector('.add-team-btn')?.addEventListener('click', async () => {
+  container.querySelector('.add-team-btn')?.addEventListener('click', withErrorToast(async () => {
     const name = container.querySelector('.new-team-name').value.trim();
     if (!name) return showToast('Enter a team name');
     await apiPut(`/api/teams/${encodeURIComponent(name)}`, {});
     showToast('Team added');
     renderProjects();
-  });
-  container.querySelector('.add-client-btn')?.addEventListener('click', async () => {
+  }));
+  container.querySelector('.add-client-btn')?.addEventListener('click', withErrorToast(async () => {
     const name = container.querySelector('.new-client-name').value.trim();
     if (!name) return showToast('Enter a client name');
     await apiPut(`/api/clients/${encodeURIComponent(name)}`, {});
     showToast('Client added');
     renderProjects();
-  });
-  container.querySelectorAll('.delete-team-btn').forEach(btn => btn.addEventListener('click', async () => {
-    const name = btn.dataset.team;
-    if (!window.confirm(`Delete team "${name}"? This only removes it from the team catalog — employees/projects keep their team field.`)) return;
+  }));
+  container.querySelectorAll('.save-team-btn').forEach(btn => btn.addEventListener('click', withErrorToast(async () => {
+    const row = btn.closest('[data-team]');
+    const name = row.dataset.team;
+    await apiPut(`/api/teams/${encodeURIComponent(name)}`, { description: row.querySelector('.team-desc-input').value.trim() });
+    showToast('Team saved');
+    renderProjects();
+  })));
+  container.querySelectorAll('.save-client-btn').forEach(btn => btn.addEventListener('click', withErrorToast(async () => {
+    const row = btn.closest('[data-client]');
+    const name = row.dataset.client;
+    await apiPut(`/api/clients/${encodeURIComponent(name)}`, { description: row.querySelector('.client-desc-input').value.trim() });
+    showToast('Client saved');
+    renderProjects();
+  })));
+  container.querySelectorAll('.delete-team-btn').forEach(btn => btn.addEventListener('click', withErrorToast(async () => {
+    const name = btn.closest('[data-team]').dataset.team;
+    if (!window.confirm(`Delete team "${name}"? This clears it from every employee and project currently assigned to it.`)) return;
     await apiDelete(`/api/teams/${encodeURIComponent(name)}`);
     showToast('Team deleted');
     renderProjects();
-  }));
-  container.querySelectorAll('.delete-client-btn').forEach(btn => btn.addEventListener('click', async () => {
-    const name = btn.dataset.client;
-    if (!window.confirm(`Delete client "${name}"? This only removes it from the client catalog — projects keep their client field.`)) return;
+  })));
+  container.querySelectorAll('.delete-client-btn').forEach(btn => btn.addEventListener('click', withErrorToast(async () => {
+    const name = btn.closest('[data-client]').dataset.client;
+    if (!window.confirm(`Delete client "${name}"? This clears it from every project currently assigned to it.`)) return;
     await apiDelete(`/api/clients/${encodeURIComponent(name)}`);
     showToast('Client deleted');
     renderProjects();
-  }));
-  container.querySelector('.add-project-btn')?.addEventListener('click', async () => {
+  })));
+  container.querySelector('.add-project-btn')?.addEventListener('click', withErrorToast(async () => {
     const name = container.querySelector('.new-project-name').value.trim();
     if (!name) return showToast('Enter a project name');
     const customer = container.querySelector('.new-project-customer')?.value.trim() || '';
@@ -941,15 +955,31 @@ function attachOrgDirectoryHandlers(container) {
     await apiPost('/api/projects', { project_name: name, customer_name: customer, git_remote_url: remote });
     showToast('Project added');
     renderProjects();
-  });
+  }));
 }
 
 function orgDirectoryPanel(directory) {
   const teams = directory?.teams || [];
   const clients = directory?.clients || [];
   const employees = directory?.employees || [];
-  const teamRows = teams.slice(0, 8).map(t => `<div class="exec-row compact"><span>${esc(t.name)}</span><span>${t.employees || 0} people</span><span>${t.projects || 0} projects</span><button class="btn btn-secondary delete-team-btn" data-team="${esc(t.name)}" title="Delete team">Delete</button></div>`).join('');
-  const clientRows = clients.slice(0, 8).map(c => `<div class="exec-row compact"><span>${esc(c.name)}</span><span>${c.projects || 0} projects</span><span>${fmtCost(c.cost_usd || 0)}</span><button class="btn btn-secondary delete-client-btn" data-client="${esc(c.name)}" title="Delete client">Delete</button></div>`).join('');
+  const teamRows = teams.map(t => `
+    <tr data-team="${esc(t.name)}">
+      <td>${esc(t.name)}</td>
+      <td>${t.employees || 0} people</td>
+      <td>${t.projects || 0} projects</td>
+      <td><input class="filter-select team-desc-input" value="${esc(t.description || '')}" placeholder="Description (optional)"></td>
+      <td><button class="btn btn-secondary save-team-btn">Save</button></td>
+      <td><button class="btn btn-secondary delete-team-btn">Delete</button></td>
+    </tr>`).join('');
+  const clientRows = clients.map(c => `
+    <tr data-client="${esc(c.name)}">
+      <td>${esc(c.name)}</td>
+      <td>${c.projects || 0} projects</td>
+      <td class="money">${fmtCost(c.cost_usd || 0)}</td>
+      <td><input class="filter-select client-desc-input" value="${esc(c.description || '')}" placeholder="Description (optional)"></td>
+      <td><button class="btn btn-secondary save-client-btn">Save</button></td>
+      <td><button class="btn btn-secondary delete-client-btn">Delete</button></td>
+    </tr>`).join('');
   return `<div class="card card-wide org-directory-card">
     <h3>Org Directory</h3>
     <p class="muted-copy">AIQ keeps employees, teams, projects, and clients optional but editable. Edge collectors keep project membership fresh automatically; admins can correct names, teams, clients, and billing codes here.</p>
@@ -965,9 +995,27 @@ function orgDirectoryPanel(directory) {
       <label>Git Remote URL<input class="filter-select new-project-remote" placeholder="git@github.com:org/repo.git or https://github.com/org/repo.git"></label>
       <button class="btn btn-secondary add-project-btn">Add Project</button>
     </div>
-    <div class="card-grid two-col">
-      <div><h4>Teams</h4><div class="exec-table">${teamRows || emptyRow('No teams yet')}</div><div class="org-edit-grid add-team-form"><input class="filter-select new-team-name" placeholder="New team name"><button class="btn btn-secondary add-team-btn">Add Team</button></div></div>
-      <div><h4>Clients</h4><div class="exec-table">${clientRows || emptyRow('No clients yet')}</div><div class="org-edit-grid add-client-form"><input class="filter-select new-client-name" placeholder="New client name"><button class="btn btn-secondary add-client-btn">Add Client</button></div></div>
+    <div style="display:flex; flex-direction:column; gap:18px;">
+      <div>
+        <h4>Teams</h4>
+        <div style="overflow-x:auto;">
+          <table class="proj-emp-table">
+            <thead><tr><th>Name</th><th>People</th><th>Projects</th><th>Description</th><th></th><th></th></tr></thead>
+            <tbody>${teamRows || `<tr><td colspan="6">No teams yet</td></tr>`}</tbody>
+          </table>
+        </div>
+        <div class="org-edit-grid add-team-form"><input class="filter-select new-team-name" placeholder="New team name"><button class="btn btn-secondary add-team-btn">Add Team</button></div>
+      </div>
+      <div>
+        <h4>Clients</h4>
+        <div style="overflow-x:auto;">
+          <table class="proj-emp-table">
+            <thead><tr><th>Name</th><th>Projects</th><th>Spend</th><th>Description</th><th></th><th></th></tr></thead>
+            <tbody>${clientRows || `<tr><td colspan="6">No clients yet</td></tr>`}</tbody>
+          </table>
+        </div>
+        <div class="org-edit-grid add-client-form"><input class="filter-select new-client-name" placeholder="New client name"><button class="btn btn-secondary add-client-btn">Add Client</button></div>
+      </div>
     </div>
   </div>`;
 }
@@ -1048,6 +1096,7 @@ async function openProjectModal(projectId) {
         <label>Git Remote URL<input class="filter-select project-remote-input" value="${esc(p.git_remote_url || '')}" placeholder="git@github.com:org/repo.git"></label>
         <label>Billing Code<input class="filter-select project-billing-input" value="${esc(billingCode || '')}" placeholder="Optional"></label>
         <button class="btn btn-secondary save-project-profile">Save Project</button>
+        <button class="btn btn-secondary delete-project-profile">Delete Project</button>
       </div>
       <div class="project-meta-grid">
         ${metaItem('Team', team)}
@@ -1176,7 +1225,7 @@ async function openProjectModal(projectId) {
         ${branchHTML}
       </div>
     `;
-    body.querySelector('.save-project-profile')?.addEventListener('click', async () => {
+    body.querySelector('.save-project-profile')?.addEventListener('click', withErrorToast(async () => {
       const box = body.querySelector('[data-project-profile]');
       await apiPatch(`/api/projects/${encodeURIComponent(p.project_id)}`, {
         project_name: box.querySelector('.project-name-input').value.trim(),
@@ -1189,7 +1238,14 @@ async function openProjectModal(projectId) {
       showToast('Project updated');
       renderProjects();
       openProjectModal(p.project_id);
-    });
+    }));
+    body.querySelector('.delete-project-profile')?.addEventListener('click', withErrorToast(async () => {
+      if (!window.confirm(`Permanently delete "${p.project_name || p.project_id}"? This removes its cost/activity rollups; employees keep their raw collected data.`)) return;
+      await apiDelete(`/api/projects/${encodeURIComponent(p.project_id)}`);
+      showToast('Project deleted');
+      document.getElementById('employeeModal').classList.remove('active');
+      renderProjects();
+    }));
   } catch (e) {
     console.error('Project modal error:', e);
     body.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Failed to load</h3><p>${esc(e.message)}</p></div>`;
@@ -1227,7 +1283,7 @@ async function renderRules() {
           </div>
         </div>
       `).join('')}`;
-    container.querySelectorAll('.save-rule-btn').forEach(btn => btn.addEventListener('click', async (e) => {
+    container.querySelectorAll('.save-rule-btn').forEach(btn => btn.addEventListener('click', withErrorToast(async (e) => {
       const box = e.target.closest('.rule-controls');
       await apiPut(`/api/rules/${encodeURIComponent(box.dataset.rule)}`, {
         enabled: box.querySelector('.rule-enabled-input').checked,
@@ -1236,7 +1292,7 @@ async function renderRules() {
       allRules = [];
       showToast('Rule updated');
       renderRules();
-    }));
+    })));
   } catch (e) {
     console.error('Rules error:', e);
     showToast('Failed to load rules: ' + e.message);
@@ -1439,13 +1495,13 @@ function renderMeProjects() {
       <div class="card card-wide"><h3>Your Projects (${myProjects.length})</h3>${projectHTML}</div>
       <div class="card card-wide" style="margin-top:16px"><h3>Agent Harness Usage</h3>${harnessBadges(projectHarness)}</div>
     `;
-    container.querySelectorAll('.save-project-assignment').forEach(btn => btn.addEventListener('click', async (e) => {
+    container.querySelectorAll('.save-project-assignment').forEach(btn => btn.addEventListener('click', withErrorToast(async (e) => {
       const row = e.target.closest('.project-assign-row');
       await apiPut(`/api/me/projects/${encodeURIComponent(row.dataset.detected)}`, { project_id: row.querySelector('.assign-project-select').value });
       showToast('Project assignment saved');
       meData = null;
       renderMeProjects();
-    }));
+    })));
   });
 }
 
@@ -1516,6 +1572,20 @@ function showToast(msg) {
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 5000);
+}
+
+// Every admin write button routes click handlers through this so a failed
+// write (bad/cancelled admin key, 404, network error) always surfaces a
+// toast instead of failing silently with no feedback.
+function withErrorToast(fn) {
+  return async (...args) => {
+    try {
+      await fn(...args);
+    } catch (e) {
+      console.error(e);
+      showToast('Action failed: ' + e.message);
+    }
+  };
 }
 
 async function checkServerStatus() {

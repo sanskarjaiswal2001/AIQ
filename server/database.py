@@ -1538,6 +1538,20 @@ def update_project_metadata(project_id: str, team: str | None = None, client: st
         return True
 
 
+def delete_project(project_id: str) -> bool:
+    """Delete a project and its rollup rows. Employee-level detected-project
+    assignments pointing at it fall back to "Other Usage" (NULL) rather than
+    being deleted, since that history belongs to the employee, not the project."""
+    with db() as conn:
+        existing = conn.execute("SELECT project_id FROM projects WHERE project_id = ?", (project_id,)).fetchone()
+        if not existing:
+            return False
+        conn.execute("DELETE FROM project_snapshots WHERE project_id = ?", (project_id,))
+        conn.execute("UPDATE project_assignments SET assigned_project_id = NULL WHERE assigned_project_id = ?", (project_id,))
+        conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
+    return True
+
+
 def list_teams() -> list[dict[str, Any]]:
     with db() as conn:
         rows = conn.execute(
@@ -1575,8 +1589,13 @@ def upsert_team(name: str, description: str | None = None) -> dict[str, Any]:
 
 
 def delete_team(name: str) -> None:
+    """Delete a team and clear it from every employee/project that had it —
+    otherwise the directory list re-derives the "deleted" team right back
+    from those references and it looks like nothing happened."""
     with db() as conn:
         conn.execute("DELETE FROM teams WHERE name = ?", (name,))
+        conn.execute("UPDATE employees SET team = NULL WHERE team = ?", (name,))
+        conn.execute("UPDATE projects SET team = NULL WHERE team = ?", (name,))
 
 
 def list_clients() -> list[dict[str, Any]]:
@@ -1615,5 +1634,9 @@ def upsert_client(name: str, description: str | None = None) -> dict[str, Any]:
 
 
 def delete_client(name: str) -> None:
+    """Delete a client and clear it from every project that had it — same
+    reasoning as delete_team, the UNION-derived list would otherwise bring
+    it right back."""
     with db() as conn:
         conn.execute("DELETE FROM clients WHERE name = ?", (name,))
+        conn.execute("UPDATE projects SET client = NULL, customer_name = NULL WHERE client = ? OR customer_name = ?", (name, name))

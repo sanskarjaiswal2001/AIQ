@@ -887,8 +887,13 @@ def project_detail(project_id: str) -> dict[str, Any]:
 
 
 @app.patch("/api/projects/{project_id:path}")
-def update_project(project_id: str, body: dict[str, Any] = Body(...)):
+def update_project(
+    project_id: str,
+    body: dict[str, Any] = Body(...),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+):
     """Admin-update project metadata (name, team, client, billing_code)."""
+    _require_admin(x_admin_key)
     ok = db.update_project_metadata(
         project_id,
         project_name=body.get("project_name"),
@@ -900,6 +905,18 @@ def update_project(project_id: str, body: dict[str, Any] = Body(...)):
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Project not found")
+    return {"status": "ok", "project_id": project_id}
+
+
+@app.delete("/api/projects/{project_id:path}")
+def remove_project(
+    project_id: str,
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    _require_admin(x_admin_key)
+    ok = db.delete_project(project_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
     return {"status": "ok", "project_id": project_id}
 
 
