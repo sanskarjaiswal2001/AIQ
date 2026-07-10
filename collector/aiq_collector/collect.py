@@ -121,8 +121,17 @@ def post_to_server(server_url: str, payload: dict, api_key: str = "") -> bool:
         with urllib.request.urlopen(req, timeout=30) as resp:
             status = resp.status
             return 200 <= status < 300
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            body = json.loads(exc.read().decode("utf-8", errors="replace"))
+            detail = f" — {body.get('detail', body)}"
+        except Exception:
+            pass
+        print(f"ERROR: {endpoint} rejected the request: HTTP {exc.code}{detail}", file=sys.stderr)
+        return False
     except (urllib.error.URLError, OSError) as exc:
-        print(f"ERROR: failed to POST to {endpoint}: {exc}", file=sys.stderr)
+        print(f"ERROR: failed to reach {endpoint}: {exc}. Check the server is running and reachable on this network.", file=sys.stderr)
         return False
     except Exception as exc:  # pragma: no cover — defensive
         print(f"ERROR: unexpected error posting to {endpoint}: {exc}", file=sys.stderr)

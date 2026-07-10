@@ -322,11 +322,19 @@ def command_register(args: argparse.Namespace) -> int:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        _ = exc.read()
-        print("Registration not yet available on this server")
+        detail = ""
+        try:
+            body = json.loads(exc.read().decode("utf-8", errors="replace"))
+            detail = f" — {body.get('detail', body)}"
+        except Exception:
+            pass
+        print(f"Registration failed: HTTP {exc.code}{detail}", file=sys.stderr)
         return 1
-    except (urllib.error.URLError, OSError, json.JSONDecodeError):
-        print("Registration not yet available on this server")
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"Registration failed: could not reach {endpoint} ({exc}). Check the server is running and the URL/port are correct.", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as exc:
+        print(f"Registration failed: server response was not valid JSON ({exc}).", file=sys.stderr)
         return 1
 
     api_key = data.get("api_key") or data.get("key") or ""
