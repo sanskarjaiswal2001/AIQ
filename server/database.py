@@ -264,15 +264,18 @@ def init_db() -> dict[str, str]:
 
 
 # Every table that carries an employee_id foreign key — kept in one place so
-# the id-renumbering migration and future employee-delete logic stay in sync.
+# the id-renumbering migration and employee-delete logic stay in sync.
+# Order matters for delete_employee: metrics_summary/anti_patterns/
+# project_snapshots also FK snapshot_id -> snapshots(id), so snapshots must
+# be deleted last.
 EMPLOYEE_ID_TABLES = (
-    "snapshots",
     "metrics_summary",
     "anti_patterns",
-    "api_keys",
     "project_snapshots",
+    "api_keys",
     "project_assignments",
     "employee_plan_overrides",
+    "snapshots",
 )
 
 
@@ -501,6 +504,19 @@ def verify_api_key(api_key: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Employees
 # ---------------------------------------------------------------------------
+
+
+def delete_employee(employee_id: str) -> bool:
+    """Permanently delete an employee and every row that references them
+    (snapshots, metrics, anti-patterns, api keys, project assignments, plan
+    overrides). Returns False if the employee doesn't exist."""
+    with db() as conn:
+        if get_employee(conn, employee_id) is None:
+            return False
+        for table in EMPLOYEE_ID_TABLES:
+            conn.execute(f"DELETE FROM {table} WHERE employee_id = ?", (employee_id,))
+        conn.execute("DELETE FROM employees WHERE id = ?", (employee_id,))
+    return True
 
 
 def upsert_employee(conn: sqlite3.Connection, employee_id: str, name: str | None, team: str | None, email: str | None = None) -> None:

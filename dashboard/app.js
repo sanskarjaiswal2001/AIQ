@@ -539,6 +539,7 @@ async function openEmployeeModal(employeeId) {
         <label>Email<input class="filter-select emp-email-input" value="${esc(emp.email || '')}" placeholder="email@company.com"></label>
         <label>Team<input class="filter-select emp-team-input" value="${esc(emp.team || '')}" placeholder="Team"></label>
         <button class="btn btn-secondary save-employee-profile">Save Employee</button>
+        <button class="btn btn-secondary delete-employee-profile">Delete Employee</button>
       </div>`;
 
     const scoreCards = [
@@ -656,6 +657,14 @@ async function openEmployeeModal(employeeId) {
       allEmployees = [];
       showToast('Employee updated');
       openEmployeeModal(emp.employee_id);
+    });
+    body.querySelector('.delete-employee-profile')?.addEventListener('click', async () => {
+      if (!window.confirm(`Permanently delete ${emp.name || emp.employee_id}? This removes all their snapshots, scores, and history.`)) return;
+      await apiDelete(`/api/employees/${encodeURIComponent(emp.employee_id)}`);
+      allEmployees = [];
+      showToast('Employee deleted');
+      document.getElementById('employeeModal').classList.remove('active');
+      renderEmployees();
     });
   } catch (e) {
     console.error('Modal error:', e);

@@ -272,6 +272,18 @@ def update_employee(
     return {"status": "ok", "employee_id": employee_id}
 
 
+@app.delete("/api/employees/{employee_id}")
+def remove_employee(
+    employee_id: str,
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    _require_admin(x_admin_key)
+    ok = db.delete_employee(employee_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found")
+    return {"status": "ok", "employee_id": employee_id}
+
+
 @app.put("/api/teams/{team_name}")
 def upsert_team(
     team_name: str,
