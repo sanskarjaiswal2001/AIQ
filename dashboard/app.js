@@ -3,9 +3,12 @@
 
 const API_BASE = window.location.origin.replace(/\/$/, '');
 const IS_EMPLOYEE_DASHBOARD = window.location.pathname === '/me';
+const PERSONAL_VIEWS = ['me', 'me-activity', 'me-skills', 'me-projects', 'me-prompts', 'me-plan'];
 let currentView = 'overview';
 let allEmployees = [];
 let allRules = [];
+let meData = null;
+let meDataPromise = null;
 
 // ── API helpers ────────────────────────────────────────
 async function api(path, opts = {}) {
@@ -48,6 +51,10 @@ async function apiPatch(path, body) {
   return apiWrite('PATCH', path, body);
 }
 
+async function apiDelete(path) {
+  return apiWrite('DELETE', path, {});
+}
+
 async function apiWrite(method, path, body) {
   const send = async () => {
     const headers = { 'Content-Type': 'application/json' };
@@ -84,6 +91,17 @@ function initTheme() {
 }
 
 // ── Score helpers ──────────────────────────────────────
+// practice_scores can carry a flat number under the underscore key, or a
+// richer { score, weekly } object under the hyphenated key (real collector
+// payloads send both — the hyphenated one is authoritative when present).
+function extractScore(scores, hyphenKey, underscoreKey) {
+  const h = scores?.[hyphenKey];
+  if (h != null) return typeof h === 'object' ? (h.score ?? 0) : h;
+  const u = scores?.[underscoreKey];
+  if (u != null) return typeof u === 'object' ? (u.score ?? 0) : u;
+  return 0;
+}
+
 function scoreClass(score) {
   if (score >= 80) return 'excellent';
   if (score >= 60) return 'good';
@@ -123,8 +141,8 @@ function fmtDate(s) {
 
 // ── View switching ─────────────────────────────────────
 function switchView(view) {
-  if (IS_EMPLOYEE_DASHBOARD && view !== 'me') view = 'me';
-  if (!IS_EMPLOYEE_DASHBOARD && view === 'me') view = 'overview';
+  if (IS_EMPLOYEE_DASHBOARD && !PERSONAL_VIEWS.includes(view)) view = 'me';
+  if (!IS_EMPLOYEE_DASHBOARD && PERSONAL_VIEWS.includes(view)) view = 'overview';
   currentView = view;
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
@@ -141,7 +159,12 @@ function switchView(view) {
     projects: 'Projects',
     staffing: 'Staffing Intelligence',
     rules: 'Anti-Pattern Rules',
-    me: 'My Dashboard',
+    me: 'My Overview',
+    'me-activity': 'Activity',
+    'me-skills': 'Skills & Coaching',
+    'me-projects': 'My Projects',
+    'me-prompts': 'Prompt History',
+    'me-plan': 'Plan & Usage',
   };
   const kickers = {
     overview: 'Team usage and ROI',
@@ -152,7 +175,12 @@ function switchView(view) {
     projects: 'Project-level AI cost attribution',
     staffing: 'Capacity and staffing intelligence',
     rules: 'Detection logic and coaching rules',
-    me: 'Personal usage and coaching',
+    me: 'Your scores and plan fit',
+    'me-activity': 'Your sessions and usage trend',
+    'me-skills': 'Practice detail and coaching tips',
+    'me-projects': 'Where your AI work goes',
+    'me-prompts': 'Your recent prompts — private',
+    'me-plan': 'Your plan fit and limits',
   };
   document.getElementById('pageTitle').textContent = titles[view] || view;
   const kicker = document.getElementById('pageKicker');
@@ -170,7 +198,12 @@ function renderView(view) {
     case 'projects': renderProjects(); break;
     case 'staffing': renderStaffing(); break;
     case 'rules': renderRules(); break;
-    case 'me': renderMe(); break;
+    case 'me': renderMeOverview(); break;
+    case 'me-activity': renderMeActivity(); break;
+    case 'me-skills': renderMeSkills(); break;
+    case 'me-projects': renderMeProjects(); break;
+    case 'me-prompts': renderMePrompts(); break;
+    case 'me-plan': renderMePlan(); break;
   }
 }
 
@@ -235,7 +268,7 @@ async function renderOverview() {
     prEl.innerHTML = pr.length ? pr.map(p => `
       <div class="plan-rec-item">
         <div>
-          <div class="pr-employee">${esc(p.employee_id)}</div>
+          <div class="pr-employee">${esc(p.name || p.employee_id)}</div>
           <div class="pr-reason">${esc(p.reason)}</div>
         </div>
         <span class="plan-badge ${planClass(p.recommendation)}">${esc(p.recommendation)}</span>
@@ -509,13 +542,13 @@ async function openEmployeeModal(employeeId) {
       </div>`;
 
     const scoreCards = [
-      ['Prompt Quality', scores['prompt-quality']],
-      ['Session Hygiene', scores['session-hygiene']],
-      ['Code Review', scores['code-review']],
-      ['Tool Mastery', scores['tool-mastery']],
-      ['Context Mgmt', scores['context-management']],
-    ].map(([label, val]) => {
-      const v = typeof val === 'object' ? val?.score : val;
+      ['Prompt Quality', 'prompt-quality', 'prompt_quality'],
+      ['Session Hygiene', 'session-hygiene', 'session_hygiene'],
+      ['Code Review', 'code-review', 'code_review'],
+      ['Tool Mastery', 'tool-mastery', 'tool_mastery'],
+      ['Context Mgmt', 'context-management', 'context_management'],
+    ].map(([label, hyphenKey, underscoreKey]) => {
+      const v = extractScore(scores, hyphenKey, underscoreKey);
       return `<div class="modal-score-card"><div class="ms-label">${label}</div><div class="ms-value" style="color:${scoreColor(v || 0)}">${(v || 0).toFixed(0)}</div></div>`;
     }).join('');
 
@@ -730,7 +763,7 @@ async function renderPlans() {
     }).join('');
     const recHTML = recs.length ? recs.map(r => `
       <div class="plan-card">
-        <div class="pc-info"><div class="pc-name">${esc(r.employee_id)}</div><div class="pc-reason">${esc(r.reason)}</div></div>
+        <div class="pc-info"><div class="pc-name">${esc(r.name || r.employee_id)}</div><div class="pc-reason">${esc(r.reason)}</div></div>
         <span class="plan-badge ${planClass(r.recommendation)}">${esc(r.recommendation)}</span>
       </div>
     `).join('') : emptyState('No plan recommendations yet');
@@ -877,6 +910,20 @@ function attachOrgDirectoryHandlers(container) {
     showToast('Client added');
     renderProjects();
   });
+  container.querySelectorAll('.delete-team-btn').forEach(btn => btn.addEventListener('click', async () => {
+    const name = btn.dataset.team;
+    if (!window.confirm(`Delete team "${name}"? This only removes it from the team catalog — employees/projects keep their team field.`)) return;
+    await apiDelete(`/api/teams/${encodeURIComponent(name)}`);
+    showToast('Team deleted');
+    renderProjects();
+  }));
+  container.querySelectorAll('.delete-client-btn').forEach(btn => btn.addEventListener('click', async () => {
+    const name = btn.dataset.client;
+    if (!window.confirm(`Delete client "${name}"? This only removes it from the client catalog — projects keep their client field.`)) return;
+    await apiDelete(`/api/clients/${encodeURIComponent(name)}`);
+    showToast('Client deleted');
+    renderProjects();
+  }));
   container.querySelector('.add-project-btn')?.addEventListener('click', async () => {
     const name = container.querySelector('.new-project-name').value.trim();
     if (!name) return showToast('Enter a project name');
@@ -892,8 +939,8 @@ function orgDirectoryPanel(directory) {
   const teams = directory?.teams || [];
   const clients = directory?.clients || [];
   const employees = directory?.employees || [];
-  const teamRows = teams.slice(0, 8).map(t => `<div class="exec-row compact"><span>${esc(t.name)}</span><span>${t.employees || 0} people</span><span>${t.projects || 0} projects</span></div>`).join('');
-  const clientRows = clients.slice(0, 8).map(c => `<div class="exec-row compact"><span>${esc(c.name)}</span><span>${c.projects || 0} projects</span><span>${fmtCost(c.cost_usd || 0)}</span></div>`).join('');
+  const teamRows = teams.slice(0, 8).map(t => `<div class="exec-row compact"><span>${esc(t.name)}</span><span>${t.employees || 0} people</span><span>${t.projects || 0} projects</span><button class="btn btn-secondary delete-team-btn" data-team="${esc(t.name)}" title="Delete team">Delete</button></div>`).join('');
+  const clientRows = clients.slice(0, 8).map(c => `<div class="exec-row compact"><span>${esc(c.name)}</span><span>${c.projects || 0} projects</span><span>${fmtCost(c.cost_usd || 0)}</span><button class="btn btn-secondary delete-client-btn" data-client="${esc(c.name)}" title="Delete client">Delete</button></div>`).join('');
   return `<div class="card card-wide org-directory-card">
     <h3>Org Directory</h3>
     <p class="muted-copy">AIQ keeps employees, teams, projects, and clients optional but editable. Edge collectors keep project membership fresh automatically; admins can correct names, teams, clients, and billing codes here.</p>
@@ -1189,69 +1236,185 @@ async function renderRules() {
   }
 }
 
-// ── My Dashboard View ───────────────────────────────────
-async function renderMe() {
-  const container = document.getElementById('meDashboard');
+// ── Personal Dashboard (My Overview / Activity / Skills / Projects / Prompts / Plan) ──
+function meApiKeyGateHTML() {
+  return `
+    <div class="card card-wide">
+      <h3>Connect your AIQ collector</h3>
+      <p style="color:var(--text-dim);margin-bottom:16px">Paste the API key created by <code>aiq register</code>. It stays in this browser only and unlocks your personal dashboard.</p>
+      <div class="filters">
+        <input id="meApiKeyInput" class="filter-select" style="min-width:420px" placeholder="ak_..." />
+        <button class="btn btn-secondary" id="saveMeApiKey">Save key</button>
+      </div>
+    </div>`;
+}
+
+function meErrorHTML(e) {
+  const isAuth = String(e.message || '').includes('401');
+  return `<div class="empty-state"><div class="es-icon">!</div><h3>Could not load personal dashboard</h3><p>${esc(e.message)}</p><div style="text-align:left;max-width:680px;margin:16px auto;color:var(--text-dim);line-height:1.7"><strong>Fix checklist:</strong><br>1. Make sure the AIQ server terminal is still running: <code>python scripts/aiq-mothership.py health --server-url ${esc(API_BASE)}</code><br>2. Make sure you registered: <code>aiq register --server-url ${esc(API_BASE)} --invite-code &lt;code&gt; --employee-id &lt;you&gt;</code><br>3. Run one collection: <code>aiq collect</code><br>4. Paste the <code>api_key</code> from <code>~/.aiq/config.toml</code> here again.${isAuth ? '<br><strong>The saved key looks invalid or belongs to another mothership.</strong>' : ''}</div><button class="btn btn-secondary" id="clearBadApiKey">Clear key</button></div>`;
+}
+
+function getMeData(force) {
+  if (force) { meData = null; meDataPromise = null; }
+  if (meData) return Promise.resolve(meData);
+  if (!meDataPromise) {
+    meDataPromise = api('/api/me', { timeoutMs: 12000 })
+      .then(d => { meData = d; meDataPromise = null; return d; })
+      .catch(e => { meDataPromise = null; throw e; });
+  }
+  return meDataPromise;
+}
+
+async function renderMeView(containerId, renderFn) {
+  const container = document.getElementById(containerId);
   const apiKey = localStorage.getItem('aiq_api_key') || '';
   if (!apiKey) {
-    container.innerHTML = `
-      <div class="card card-wide">
-        <h3>Connect your AIQ collector</h3>
-        <p style="color:var(--text-dim);margin-bottom:16px">Paste the API key created by <code>aiq register</code>. It stays in this browser only and unlocks your personal dashboard.</p>
-        <div class="filters">
-          <input id="meApiKeyInput" class="filter-select" style="min-width:420px" placeholder="ak_..." />
-          <button class="btn btn-secondary" id="saveMeApiKey">Save key</button>
-        </div>
-      </div>`;
+    container.innerHTML = meApiKeyGateHTML();
     document.getElementById('saveMeApiKey').addEventListener('click', () => {
       const key = document.getElementById('meApiKeyInput').value.trim();
       if (!key) return showToast('Paste an API key first');
       localStorage.setItem('aiq_api_key', key);
-      renderMe();
+      renderView(currentView);
     });
     return;
   }
-
   showLoading(true);
-  container.innerHTML = `<div class="card card-wide"><h3>Loading your dashboard…</h3><p style="color:var(--text-dim)">Checking <code>/api/me</code>. If this takes more than a few seconds, verify the AIQ server is running and your API key is correct.</p></div>`;
   try {
-    const emp = await api('/api/me', { timeoutMs: 12000 });
+    const emp = await getMeData();
+    renderFn(container, emp);
+  } catch (e) {
+    console.error('Personal dashboard error:', e);
+    container.innerHTML = meErrorHTML(e);
+    document.getElementById('clearBadApiKey').addEventListener('click', () => {
+      localStorage.removeItem('aiq_api_key');
+      meData = null;
+      renderView(currentView);
+    });
+  } finally {
+    showLoading(false);
+  }
+}
+
+function meScoreCards(scores) {
+  return [
+    ['Prompt Quality', 'prompt-quality', 'prompt_quality'],
+    ['Session Hygiene', 'session-hygiene', 'session_hygiene'],
+    ['Code Review', 'code-review', 'code_review'],
+    ['Tool Mastery', 'tool-mastery', 'tool_mastery'],
+    ['Context Mgmt', 'context-management', 'context_management'],
+  ].map(([label, hyphenKey, underscoreKey]) => {
+    const v = extractScore(scores, hyphenKey, underscoreKey);
+    return `<div class="modal-score-card"><div class="ms-label">${label}</div><div class="ms-value" style="color:${scoreColor(v || 0)}">${(v || 0).toFixed(0)}</div></div>`;
+  }).join('');
+}
+
+function renderMeOverview() {
+  renderMeView('meOverview', (container, emp) => {
     const summary = emp.summary || {};
     const scores = emp.practice_scores || {};
     const recs = emp.recommendations || {};
-    const training = recs.training || [];
     const plan = recs.plan || {};
     const planFit = emp.plan_fit || {};
     const costInfo = emp.cost_interpretation || {};
-    const planContext = emp.plan_context || {};
-    const myProjects = emp.projects || [];
-    const planSource = emp.plan_config_source || 'unknown';
-    const planInference = emp.plan_inference || {};
-    const patterns = (emp.anti_patterns || []).filter(p => p.triggered);
-    const scoreCards = [
-      ['Prompt Quality', scores['prompt-quality']],
-      ['Session Hygiene', scores['session-hygiene']],
-      ['Code Review', scores['code-review']],
-      ['Tool Mastery', scores['tool-mastery']],
-      ['Context Mgmt', scores['context-management']],
-    ].map(([label, val]) => {
-      const v = typeof val === 'object' ? val?.score : val;
-      return `<div class="modal-score-card"><div class="ms-label">${label}</div><div class="ms-value" style="color:${scoreColor(v || 0)}">${(v || 0).toFixed(0)}</div></div>`;
-    }).join('');
-    const projectHarness = {};
-    for (const p of (emp.projects || [])) {
-      for (const [h, n] of Object.entries(p.harness_usage || {})) projectHarness[h] = (projectHarness[h] || 0) + Number(n || 0);
-    }
-    const employeeHarnessHTML = harnessBadges(projectHarness);
+    const action = planFit.recommendation || plan.action || 'maintain';
+    container.innerHTML = `
+      <div class="stat-cards">
+        ${statCard('Employee', esc(emp.name || emp.employee_id || 'You'), esc(emp.team || 'team not set'))}
+        ${statCard('Requests', fmtNum(summary.total_requests), 'AI interactions')}
+        ${statCard('Sessions', fmtNum(summary.total_sessions), 'logged sessions')}
+        ${statCard('AI Spend', fmtCost(costInfo.display_cost ?? summary.display_cost_usd ?? summary.estimated_cost_usd), costInfo.cost_label || 'billed / estimated')}
+        ${statCard('AI LOC', fmtNum(summary.total_ai_loc), 'generated lines')}
+      </div>
+      <div class="card-grid two-col">
+        <div class="card card-wide"><h3>Your Practice Scores</h3><div class="modal-scores">${meScoreCards(scores)}</div></div>
+        <div class="card card-wide">
+          <h3>Plan Fit</h3>
+          <div class="plan-recommendation-box">
+            <div>
+              <div class="prb-action" style="color:${action === 'upgrade' ? 'var(--green)' : action === 'train_first' ? 'var(--yellow)' : action === 'downgrade' ? 'var(--orange)' : 'var(--accent)'}">${esc(action)}</div>
+              <div class="prb-reason">${esc(planFit.reason || plan.reason || 'Not enough data')}</div>
+            </div>
+            <span class="plan-badge ${planClass(action)}">${esc(planFit.recommended_plan_id || plan.plan || 'current')}</span>
+          </div>
+          <p class="muted-copy" style="margin-top:12px">See Skills & Coaching for practice detail, and Plan & Usage for full billing context.</p>
+        </div>
+      </div>
+      <button class="btn btn-secondary" id="clearMeApiKey" style="margin-top:18px">Clear saved API key</button>
+    `;
+    document.getElementById('clearMeApiKey').addEventListener('click', () => {
+      localStorage.removeItem('aiq_api_key');
+      meData = null;
+      renderView(currentView);
+    });
+  });
+}
 
+async function renderMeActivity() {
+  await renderMeView('meActivity', async (container, emp) => {
+    const summary = emp.summary || {};
+    container.innerHTML = `
+      <div class="stat-cards">
+        ${statCard('Requests', fmtNum(summary.total_requests), 'AI interactions')}
+        ${statCard('Sessions', fmtNum(summary.total_sessions), 'logged sessions')}
+        ${statCard('AI LOC', fmtNum(summary.total_ai_loc), 'generated lines')}
+        ${statCard('Workspaces', fmtNum(summary.total_workspaces), 'tracked folders')}
+      </div>
+      <div class="card card-wide"><h3>Score History</h3><div id="meHistoryTable">Loading history…</div></div>
+    `;
+    try {
+      const history = await api('/api/me/history', { timeoutMs: 12000 });
+      const rows = (history || []).slice().reverse().map(h => `
+        <div class="team-row">
+          <span class="team-name">${fmtDate(h.period_end || h.uploaded_at)}</span>
+          <span style="color:${scoreColor(h.overall_score || 0)}">${(h.overall_score || 0).toFixed(0)}</span>
+          <span>${(h.scores?.prompt_quality ?? 0).toFixed(0)}</span>
+          <span>${(h.scores?.session_hygiene ?? 0).toFixed(0)}</span>
+          <span>${(h.scores?.code_review ?? 0).toFixed(0)}</span>
+        </div>
+      `).join('');
+      document.getElementById('meHistoryTable').outerHTML = `
+        <div class="team-breakdown" id="meHistoryTable">
+          <div class="team-row header"><span>Snapshot</span><span>Overall</span><span>Prompt Qual.</span><span>Session Hyg.</span><span>Code Review</span></div>
+          ${rows || emptyRow('No score history yet — run a few collections over time to see a trend')}
+        </div>`;
+    } catch (e) {
+      console.error('Me history error:', e);
+      document.getElementById('meHistoryTable').outerHTML = emptyState('Could not load score history.');
+    }
+  });
+}
+
+function renderMeSkills() {
+  renderMeView('meSkills', (container, emp) => {
+    const scores = emp.practice_scores || {};
+    const recs = emp.recommendations || {};
+    const training = recs.training || [];
+    const patterns = (emp.anti_patterns || []).filter(p => p.triggered);
     const trainingHTML = training.length ? training.map(t => `
       <div class="rec-item"><span class="rec-priority ${t.priority}">${t.priority}</span><div class="rec-content"><div class="rec-track">${esc(t.track)}</div><div class="rec-module">${esc(t.module)}</div></div></div>
     `).join('') : '<div style="color:var(--text-dim);padding:12px">No training needed</div>';
-    const patternHTML = patterns.length ? patterns.slice(0, 8).map(p => `
+    const patternHTML = patterns.length ? patterns.map(p => `
       <div class="modal-pattern ${severityClass(p.severity)}"><div class="mp-header"><span class="mp-name">${esc(p.rule_name)}</span><span class="mp-stats">${p.occurrences} · ${p.severity}</span></div><div class="mp-desc">${esc(p.description || '')}</div></div>
     `).join('') : '<div style="color:var(--text-dim);padding:12px">No anti-patterns detected</div>';
+    container.innerHTML = `
+      <div class="card-grid">
+        <div class="card card-wide"><h3>Your Practice Scores</h3><div class="modal-scores">${meScoreCards(scores)}</div></div>
+        <div class="card card-wide"><h3>Your Training Recommendations</h3><div class="modal-recommendations">${trainingHTML}</div></div>
+        <div class="card card-wide"><h3>Your Anti-Patterns (${patterns.length})</h3><div class="modal-patterns">${patternHTML}</div></div>
+      </div>
+    `;
+  });
+}
+
+function renderMeProjects() {
+  renderMeView('meProjects', (container, emp) => {
+    const myProjects = emp.projects || [];
     const assignable = emp.assignable_projects || [];
     const projectOptions = '<option value="">Other Usage</option>' + assignable.map(x => `<option value="${esc(x.project_id)}">${esc(x.project_name)}</option>`).join('');
+    const projectHarness = {};
+    for (const p of myProjects) {
+      for (const [h, n] of Object.entries(p.harness_usage || {})) projectHarness[h] = (projectHarness[h] || 0) + Number(n || 0);
+    }
     const projectHTML = myProjects.length ? `<div class="staff-table project-staffing">
       <div class="staff-row header"><span>Detected usage</span><span>Assigned to</span><span>Req</span><span>Cost</span><span>AI LOC</span><span>Save</span></div>
       ${myProjects.map(p => `<div class="staff-row project-assign-row" data-detected="${esc(p.detected_project_id || p.project_id)}">
@@ -1263,63 +1426,69 @@ async function renderMe() {
         <span><button class="btn btn-secondary save-project-assignment">Save</button></span>
       </div>`).join('')}
     </div>` : emptyState('No project-level activity found yet.');
-    const planFitHTML = `
-      <div class="plan-recommendation-box">
-        <div>
-          <div class="prb-action" style="color:${planFit.recommendation === 'upgrade' ? 'var(--green)' : planFit.recommendation === 'train_first' ? 'var(--yellow)' : planFit.recommendation === 'downgrade' ? 'var(--orange)' : 'var(--accent)'}">${esc(planFit.recommendation || plan.action || 'maintain')}</div>
-          <div class="prb-reason">${esc(planFit.reason || plan.reason || 'Not enough data')}</div>
-        </div>
-        <span class="plan-badge ${planClass(planFit.recommendation || plan.action)}">${esc(planFit.recommended_plan_id || planFit.recommendation || plan.plan || 'current')}</span>
-      </div>
-      <div class="project-meta-grid" style="margin-top:12px">
-        <div class="project-meta-item"><div class="pmi-label">Spend Meaning</div><div class="pmi-value">${esc(costInfo.cost_label || 'Estimated API Spend')}</div></div>
-        <div class="project-meta-item"><div class="pmi-label">Token Estimate</div><div class="pmi-value">${fmtCost(costInfo.estimated_token_cost ?? summary.estimated_cost_usd)}</div></div>
-        <div class="project-meta-item"><div class="pmi-label">Billed Months</div><div class="pmi-value">${costInfo.billed_months ?? '—'}</div></div>
-        <div class="project-meta-item"><div class="pmi-label">Pressure</div><div class="pmi-value">${esc(costInfo.pressure_level || 'unknown')}</div></div>
-        <div class="project-meta-item"><div class="pmi-label">Utilization</div><div class="pmi-value">${costInfo.utilization != null ? `${Math.round((costInfo.utilization || 0) * 100)}%` : '—'}</div></div>
-        <div class="project-meta-item"><div class="pmi-label">Context Usage</div><div class="pmi-value">${costInfo.context_window_tokens ? `${Math.round((costInfo.context_utilization || 0) * 100)}% of ${fmtNum(costInfo.context_window_tokens)}` : '—'}</div></div>
-        <div class="project-meta-item"><div class="pmi-label">Plan Source</div><div class="pmi-value">${esc(planSource)}</div></div>
-      </div>
-      ${planIdentityHTML(planContext, costInfo)}
-      <div class="unassigned-note">Detected provider: ${esc(planInference.provider || 'unknown')} (${esc(planInference.confidence || 'none')}). The harness cannot reliably know your paid plan or enterprise rolling-window allowance. Configure locally with <code>aiq config --plan-type &lt;plan_id&gt; --plan-name "&lt;Plan Name&gt;" --rolling-window-usd &lt;amount&gt;</code>, or ask an admin to set it under Plan Recommendations.</div>`;
-
     container.innerHTML = `
-      <div class="stat-cards">
-        ${statCard('Employee', esc(emp.name || emp.employee_id || 'You'), esc(emp.team || 'team not set'))}
-        ${statCard('Requests', fmtNum(summary.total_requests), 'AI interactions')}
-        ${statCard('Sessions', fmtNum(summary.total_sessions), 'logged sessions')}
-        ${statCard('AI Spend', fmtCost(costInfo.display_cost ?? summary.display_cost_usd ?? summary.estimated_cost_usd), costInfo.cost_label || 'billed / estimated')}
-        ${statCard('AI LOC', fmtNum(summary.total_ai_loc), 'generated lines')}
-      </div>
-      <div class="card-grid">
-        <div class="card card-wide"><h3>Your Practice Scores</h3><div class="modal-scores">${scoreCards}</div></div>
-        <div class="card card-wide"><h3>Your Training Recommendations</h3><div class="modal-recommendations">${trainingHTML}</div></div>
-        <div class="card card-wide"><h3>Your Plan Fit</h3>${planFitHTML}</div>
-        <div class="card card-wide"><h3>Your Projects (${myProjects.length})</h3>${projectHTML}</div>
-        <div class="card card-wide"><h3>Your Anti-Patterns (${patterns.length})</h3><div class="modal-patterns">${patternHTML}</div></div>
-      </div>
-      <button class="btn btn-secondary" id="clearMeApiKey" style="margin-top:18px">Clear saved API key</button>
+      <div class="card card-wide"><h3>Your Projects (${myProjects.length})</h3>${projectHTML}</div>
+      <div class="card card-wide" style="margin-top:16px"><h3>Agent Harness Usage</h3>${harnessBadges(projectHarness)}</div>
     `;
-    document.querySelectorAll('.save-project-assignment').forEach(btn => btn.addEventListener('click', async (e) => {
+    container.querySelectorAll('.save-project-assignment').forEach(btn => btn.addEventListener('click', async (e) => {
       const row = e.target.closest('.project-assign-row');
       await apiPut(`/api/me/projects/${encodeURIComponent(row.dataset.detected)}`, { project_id: row.querySelector('.assign-project-select').value });
       showToast('Project assignment saved');
-      renderMe();
+      meData = null;
+      renderMeProjects();
     }));
-    document.getElementById('clearMeApiKey').addEventListener('click', () => {
-      localStorage.removeItem('aiq_api_key');
-      renderMe();
-    });
-  } catch (e) {
-    const isAuth = String(e.message || '').includes('401');
-    container.innerHTML = `<div class="empty-state"><div class="es-icon">!</div><h3>Could not load personal dashboard</h3><p>${esc(e.message)}</p><div style="text-align:left;max-width:680px;margin:16px auto;color:var(--text-dim);line-height:1.7"><strong>Fix checklist:</strong><br>1. Make sure the AIQ server terminal is still running: <code>python scripts/aiq-mothership.py health --server-url ${esc(API_BASE)}</code><br>2. Make sure you registered: <code>aiq register --server-url ${esc(API_BASE)} --invite-code &lt;code&gt; --employee-id &lt;you&gt;</code><br>3. Run one collection: <code>aiq collect</code><br>4. Paste the <code>api_key</code> from <code>~/.aiq/config.toml</code> here again.${isAuth ? '<br><strong>The saved key looks invalid or belongs to another mothership.</strong>' : ''}</div><button class="btn btn-secondary" id="clearBadApiKey">Clear key</button></div>`;
-    document.getElementById('clearBadApiKey').addEventListener('click', () => {
-      localStorage.removeItem('aiq_api_key');
-      renderMe();
-    });
-  } finally {
-    showLoading(false);
-  }
+  });
+}
+
+function renderMePrompts() {
+  renderMeView('mePrompts', (container) => {
+    container.innerHTML = `
+      <div class="card card-wide">
+        <h3>Prompt History</h3>
+        <div class="empty-state">
+          <div class="es-icon">--</div>
+          <p>AIQ does not store or expose individual prompt text today — only aggregate metrics and detected patterns. This tab is reserved for when per-prompt history (private to you) ships.</p>
+        </div>
+      </div>
+    `;
+  });
+}
+
+function renderMePlan() {
+  renderMeView('mePlan', (container, emp) => {
+    const summary = emp.summary || {};
+    const recs = emp.recommendations || {};
+    const plan = recs.plan || {};
+    const planFit = emp.plan_fit || {};
+    const costInfo = emp.cost_interpretation || {};
+    const planContext = emp.plan_context || {};
+    const planSource = emp.plan_config_source || 'unknown';
+    const planInference = emp.plan_inference || {};
+    const action = planFit.recommendation || plan.action || 'maintain';
+    container.innerHTML = `
+      <div class="card card-wide">
+        <h3>Your Plan Fit</h3>
+        <div class="plan-recommendation-box">
+          <div>
+            <div class="prb-action" style="color:${action === 'upgrade' ? 'var(--green)' : action === 'train_first' ? 'var(--yellow)' : action === 'downgrade' ? 'var(--orange)' : 'var(--accent)'}">${esc(action)}</div>
+            <div class="prb-reason">${esc(planFit.reason || plan.reason || 'Not enough data')}</div>
+          </div>
+          <span class="plan-badge ${planClass(action)}">${esc(planFit.recommended_plan_id || planFit.recommendation || plan.plan || 'current')}</span>
+        </div>
+        <div class="project-meta-grid" style="margin-top:12px">
+          <div class="project-meta-item"><div class="pmi-label">Spend Meaning</div><div class="pmi-value">${esc(costInfo.cost_label || 'Estimated API Spend')}</div></div>
+          <div class="project-meta-item"><div class="pmi-label">Token Estimate</div><div class="pmi-value">${fmtCost(costInfo.estimated_token_cost ?? summary.estimated_cost_usd)}</div></div>
+          <div class="project-meta-item"><div class="pmi-label">Billed Months</div><div class="pmi-value">${costInfo.billed_months ?? '—'}</div></div>
+          <div class="project-meta-item"><div class="pmi-label">Pressure</div><div class="pmi-value">${esc(costInfo.pressure_level || 'unknown')}</div></div>
+          <div class="project-meta-item"><div class="pmi-label">Utilization</div><div class="pmi-value">${costInfo.utilization != null ? `${Math.round((costInfo.utilization || 0) * 100)}%` : '—'}</div></div>
+          <div class="project-meta-item"><div class="pmi-label">Context Usage</div><div class="pmi-value">${costInfo.context_window_tokens ? `${Math.round((costInfo.context_utilization || 0) * 100)}% of ${fmtNum(costInfo.context_window_tokens)}` : '—'}</div></div>
+          <div class="project-meta-item"><div class="pmi-label">Plan Source</div><div class="pmi-value">${esc(planSource)}</div></div>
+        </div>
+        ${planIdentityHTML(planContext, costInfo)}
+        <div class="unassigned-note">Detected provider: ${esc(planInference.provider || 'unknown')} (${esc(planInference.confidence || 'none')}). The harness cannot reliably know your paid plan or enterprise rolling-window allowance. Configure locally with <code>aiq config --plan-type &lt;plan_id&gt; --plan-name "&lt;Plan Name&gt;" --rolling-window-usd &lt;amount&gt;</code>, or ask an admin to set it under Plan Recommendations.</div>
+      </div>
+    `;
+  });
 }
 
 // ── Utilities ──────────────────────────────────────────
@@ -1367,8 +1536,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.body.classList.toggle('employee-dashboard-mode', IS_EMPLOYEE_DASHBOARD);
   document.body.classList.toggle('admin-dashboard-mode', !IS_EMPLOYEE_DASHBOARD);
   document.querySelectorAll('.nav-item').forEach(item => {
-    if (IS_EMPLOYEE_DASHBOARD && item.dataset.view !== 'me') item.remove();
-    if (!IS_EMPLOYEE_DASHBOARD && item.dataset.view === 'me') item.remove();
+    const isPersonalItem = PERSONAL_VIEWS.includes(item.dataset.view);
+    if (IS_EMPLOYEE_DASHBOARD && !isPersonalItem) item.remove();
+    if (!IS_EMPLOYEE_DASHBOARD && isPersonalItem) item.remove();
   });
   document.querySelector('.logo-sub').textContent = IS_EMPLOYEE_DASHBOARD ? 'Personal' : 'Admin';
   document.title = IS_EMPLOYEE_DASHBOARD ? 'AIQ Personal Dashboard' : 'AIQ Admin Dashboard';

@@ -17,6 +17,8 @@
     <symbol id="i-staffing" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16M7 7h4v4H7zM13 13h4v4h-4z"/></symbol>
     <symbol id="i-rules" viewBox="0 0 24 24"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5"/></symbol>
     <symbol id="i-self" viewBox="0 0 24 24"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 20a8 8 0 0 1 16 0"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></symbol>
+    <symbol id="i-prompts" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
   </svg>
   <div id="app">
     <!-- Sidebar -->
@@ -52,8 +54,23 @@
         <li class="nav-item" data-view="rules" aria-label="Anti-Pattern Rules">
           <span class="nav-icon"><svg><use href="#i-rules"></use></svg></span><span><span class="nav-label">Rules</span><span class="nav-hint">detectors</span></span>
         </li>
-        <li class="nav-item" data-view="me" aria-label="My Dashboard">
-          <span class="nav-icon"><svg><use href="#i-self"></use></svg></span><span><span class="nav-label">My Dashboard</span><span class="nav-hint">self view</span></span>
+        <li class="nav-item" data-view="me" aria-label="My Overview">
+          <span class="nav-icon"><svg><use href="#i-self"></use></svg></span><span><span class="nav-label">Overview</span><span class="nav-hint">scores + plan fit</span></span>
+        </li>
+        <li class="nav-item" data-view="me-activity" aria-label="Activity">
+          <span class="nav-icon"><svg><use href="#i-activity"></use></svg></span><span><span class="nav-label">Activity</span><span class="nav-hint">sessions + trend</span></span>
+        </li>
+        <li class="nav-item" data-view="me-skills" aria-label="Skills and Coaching">
+          <span class="nav-icon"><svg><use href="#i-training"></use></svg></span><span><span class="nav-label">Skills & Coaching</span><span class="nav-hint">practice detail</span></span>
+        </li>
+        <li class="nav-item" data-view="me-projects" aria-label="My Projects">
+          <span class="nav-icon"><svg><use href="#i-projects"></use></svg></span><span><span class="nav-label">My Projects</span><span class="nav-hint">where your work goes</span></span>
+        </li>
+        <li class="nav-item" data-view="me-prompts" aria-label="Prompt History">
+          <span class="nav-icon"><svg><use href="#i-prompts"></use></svg></span><span><span class="nav-label">Prompt History</span><span class="nav-hint">private to you</span></span>
+        </li>
+        <li class="nav-item" data-view="me-plan" aria-label="Plan and Usage">
+          <span class="nav-icon"><svg><use href="#i-plans"></use></svg></span><span><span class="nav-label">Plan & Usage</span><span class="nav-hint">limits + billing</span></span>
         </li>
       </ul>
       <div class="sidebar-footer">
@@ -161,9 +178,34 @@
           <div id="rulesList" class="rules-list"></div>
         </div>
 
-        <!-- My Dashboard View -->
+        <!-- Personal: Overview -->
         <div class="view" id="view-me">
-          <div id="meDashboard" class="employee-self-view"></div>
+          <div id="meOverview" class="employee-self-view"></div>
+        </div>
+
+        <!-- Personal: Activity -->
+        <div class="view" id="view-me-activity">
+          <div id="meActivity" class="employee-self-view"></div>
+        </div>
+
+        <!-- Personal: Skills & Coaching -->
+        <div class="view" id="view-me-skills">
+          <div id="meSkills" class="employee-self-view"></div>
+        </div>
+
+        <!-- Personal: My Projects -->
+        <div class="view" id="view-me-projects">
+          <div id="meProjects" class="employee-self-view"></div>
+        </div>
+
+        <!-- Personal: Prompt History -->
+        <div class="view" id="view-me-prompts">
+          <div id="mePrompts" class="employee-self-view"></div>
+        </div>
+
+        <!-- Personal: Plan & Usage -->
+        <div class="view" id="view-me-plan">
+          <div id="mePlan" class="employee-self-view"></div>
         </div>
       </div>
 
