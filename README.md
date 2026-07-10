@@ -112,7 +112,7 @@ python scripts/aiq-mothership.py create-invite --team Demo --uses-remaining 5
 ```bash
 cd AIQ/collector
 python3 -m aiq_collector.cli register --server-url http://<host-hostname-or-ip>:8000 \
-  --invite-code <code> --employee-name "Your Name" --employee-email you@company.com
+  --invite-code <code> --name "Your Name" --email you@company.com
 python3 -m aiq_collector.cli collect
 ```
 
@@ -159,7 +159,7 @@ Use this flow:
 6. Identify my display name and team:
    - If my OS account full name is available, use it as the default display name.
    - Otherwise ask me for my preferred display name and team.
-   - Create a stable employee ID from that name, such as jane-doe. Do not use local-user.
+   - Do not invent an employee ID (no slugs like jane-doe or local-user) — the mothership assigns a numeric employee ID automatically on registration.
 7. Create an invite:
    python scripts/aiq-mothership.py create-invite --server-url http://127.0.0.1:8000 --team Local
    Save the invite code from the JSON response.
@@ -167,7 +167,8 @@ Use this flow:
    cd collector
    python -m pip install -e .
 9. Register me with the invite code using my real display name:
-   aiq register --server-url http://127.0.0.1:8000 --invite-code <INVITE_CODE> --employee-id <stable-employee-id> --name "<My Real Name>" --team "<My Team>"
+   aiq register --server-url http://127.0.0.1:8000 --invite-code <INVITE_CODE> --name "<My Real Name>" --team "<My Team>"
+   The server prints back the numeric employee ID it assigned — note it, but don't pass your own --employee-id.
 10. If I provide plan details, configure them before collection, for example:
    aiq config --plan-type claude_team_standard --plan-name "Claude Team Standard" --rolling-window-usd 25 --rolling-window-days 30 --seat-cost-usd 25
 11. Run one collection:
@@ -228,6 +229,7 @@ Use this flow:
 Important:
 - Do not delete or move the SQLite database (aiq.db under the data-dir).
 - Do not re-run `aiq register` for existing employees; their API key in ~/.aiq/config.toml must keep working.
+- On first startup after this update, any employee still using an old name-slug ID (e.g. "local-user") is automatically renumbered to a numeric ID — one-time, logged at startup, existing API keys keep working unchanged. Employee IDs in `/api/employees` may differ from before; that's expected, not data loss.
 - If a migration is needed in the future, run it and report what changed; for now data should persist as-is.
 - If git pull fails due to local changes, stash, pull, and restore the stash; report any conflicts.
 - At the end, report: the AIQ path, git commit before and after, employee count before and after, and the dashboard URLs.
