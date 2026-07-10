@@ -84,6 +84,46 @@ py scripts\aiq-mothership.py run --host 0.0.0.0 --port 8000
 
 Dashboard is now live at `http://localhost:8000`.
 
+### Run a LAN demo (mothership + collectors on separate laptops)
+
+The mothership already binds `0.0.0.0` and allows CORS from anywhere, so no code changes are needed — one laptop hosts the mothership, everyone else's collector points at it over the local network.
+
+**On the host laptop (runs the mothership):**
+
+```bash
+python scripts/aiq-mothership.py install --generate-admin-key   # once
+python scripts/aiq-mothership.py run --port 8000                # binds 0.0.0.0
+```
+
+macOS will prompt "Allow incoming connections" for Python the first time — click **Allow** (if collectors later get connection-refused/timeouts, this is the first thing to check — System Settings → Network → Firewall).
+
+Find the host's LAN address:
+- `hostname` → e.g. `Konis-MacBook.local` (mDNS `.local` name, survives DHCP/IP changes, works cross-platform on the same network) — **preferred**
+- `ipconfig getifaddr en0` (macOS) / `ipconfig` (Windows) / `ip addr` (Linux) → raw IP, fallback if `.local` doesn't resolve
+
+Create one invite per person (or one invite with `--uses-remaining N`):
+
+```bash
+python scripts/aiq-mothership.py create-invite --team Demo --uses-remaining 5
+```
+
+**On every collector laptop (including the host's own):**
+
+```bash
+cd AIQ/collector
+python3 -m aiq_collector.cli register --server-url http://<host-hostname-or-ip>:8000 \
+  --invite-code <code> --employee-name "Your Name" --employee-email you@company.com
+python3 -m aiq_collector.cli collect
+```
+
+Employee ids are assigned automatically as sequential numbers by the mothership — nothing to configure. For a live-updating demo, loop collection instead of running it once:
+
+```bash
+python3 -m aiq_collector.cli collect --daemon --interval 0.25   # every 15 minutes
+```
+
+**Dashboard**, from any laptop on the LAN: `http://<host-hostname-or-ip>:8000/` (admin) and `.../me` (personal, using the API key `register` printed).
+
 ### "Set this up locally for me" agent prompt
 
 If you use Claude Code, Codex, Cursor Agent, Copilot coding agent, or another local coding agent, paste this prompt to have it set up AIQ on your machine without deploying anything externally:
