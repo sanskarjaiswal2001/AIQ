@@ -244,8 +244,12 @@ CREATE TABLE IF NOT EXISTS employee_plan_overrides (
 """
 
 
-def init_db() -> None:
-    """Create tables/indexes if they don't already exist."""
+def init_db() -> dict[str, str]:
+    """Create tables/indexes if they don't already exist.
+
+    Returns the {old_id: new_id} mapping produced by the legacy employee-id
+    migration (empty once every employee already has a numeric id).
+    """
     with db() as conn:
         conn.executescript(SCHEMA_SQL)
         _ensure_column(conn, "employees", "email", "TEXT")
@@ -256,6 +260,56 @@ def init_db() -> None:
         _ensure_column(conn, "project_snapshots", "git_remote_url", "TEXT")
         _ensure_column(conn, "project_snapshots", "normalized_git_remote", "TEXT")
         _ensure_column(conn, "project_snapshots", "harness_usage_json", "TEXT")
+        return _migrate_legacy_employee_ids(conn)
+
+
+# Every table that carries an employee_id foreign key — kept in one place so
+# the id-renumbering migration and future employee-delete logic stay in sync.
+EMPLOYEE_ID_TABLES = (
+    "snapshots",
+    "metrics_summary",
+    "anti_patterns",
+    "api_keys",
+    "project_snapshots",
+    "project_assignments",
+    "employee_plan_overrides",
+)
+
+
+def _migrate_legacy_employee_ids(conn: sqlite3.Connection) -> dict[str, str]:
+    """One-time, idempotent: renumber any non-numeric employee_id to a numeric id.
+
+    Old installs slugified names ("local-user", "john-doe") into employee_id.
+    Going forward the mothership assigns sequential numeric ids itself, so a
+    future SSO/Azure AD integration can supply its own numeric id without any
+    ambiguity with human-readable slugs. Existing rows (and every table that
+    references employee_id) are renumbered in place, once.
+    """
+    rows = conn.execute("SELECT id FROM employees").fetchall()
+    legacy_ids = [r["id"] for r in rows if not str(r["id"]).isdigit()]
+    if not legacy_ids:
+        return {}
+
+    next_id = max((int(r["id"]) for r in rows if str(r["id"]).isdigit()), default=100000) + 1
+    conn.execute("PRAGMA foreign_keys=OFF")
+    mapping: dict[str, str] = {}
+    for old_id in legacy_ids:
+        new_id = str(next_id)
+        next_id += 1
+        mapping[old_id] = new_id
+        for table in EMPLOYEE_ID_TABLES:
+            conn.execute(f"UPDATE {table} SET employee_id = ? WHERE employee_id = ?", (new_id, old_id))
+        conn.execute("UPDATE employees SET id = ? WHERE id = ?", (new_id, old_id))
+    conn.execute("PRAGMA foreign_keys=ON")
+    return mapping
+
+
+def next_numeric_employee_id() -> str:
+    """Assign the next sequential numeric employee id (starts at 100001)."""
+    with db() as conn:
+        rows = conn.execute("SELECT id FROM employees").fetchall()
+        existing = [int(r["id"]) for r in rows if str(r["id"]).isdigit()]
+        return str(max(existing, default=100000) + 1)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -619,9 +673,12 @@ def list_employees(team: str | None = None) -> list[dict[str, Any]]:
 def ingest_snapshot(payload: dict[str, Any]) -> int:
     """Persist a full snapshot and its extracted rows. Returns snapshot id."""
     employee_id = payload["employee_id"]
-    name = payload.get("employee_name")
-    email = payload.get("employee_email") or payload.get("email")
-    team = payload.get("team")
+    # Collectors send employee_name/email as "" (not omitted) when unset —
+    # treat blank the same as absent so an admin-set name/email never gets
+    # silently wiped by the next collection run.
+    name = payload.get("employee_name") or None
+    email = (payload.get("employee_email") or payload.get("email")) or None
+    team = payload.get("team") or None
     period_start = payload.get("period_start")
     period_end = payload.get("period_end")
 
@@ -1023,6 +1080,7 @@ def get_team_overview() -> dict[str, Any]:
             per_employee.append(
                 {
                     "employee_id": eid,
+                    "name": emp["name"] or eid,
                     "team": emp["team"],
                     "total_requests": m["total_requests"],
                     "estimated_cost_usd": m["estimated_cost_usd"],
@@ -1134,6 +1192,7 @@ def get_team_overview() -> dict[str, Any]:
             plan_recommendations.append(
                 {
                     "employee_id": e["employee_id"],
+                    "name": e.get("name") or e["employee_id"],
                     "recommendation": rec["action"],
                     "plan": rec["plan"],
                     "reason": rec["reason"],
@@ -1499,6 +1558,11 @@ def upsert_team(name: str, description: str | None = None) -> dict[str, Any]:
     return {"name": name, "description": description}
 
 
+def delete_team(name: str) -> None:
+    with db() as conn:
+        conn.execute("DELETE FROM teams WHERE name = ?", (name,))
+
+
 def list_clients() -> list[dict[str, Any]]:
     with db() as conn:
         rows = conn.execute(
@@ -1532,3 +1596,8 @@ def upsert_client(name: str, description: str | None = None) -> dict[str, Any]:
             (name, description),
         )
     return {"name": name, "description": description}
+
+
+def delete_client(name: str) -> None:
+    with db() as conn:
+        conn.execute("DELETE FROM clients WHERE name = ?", (name,))

@@ -16,7 +16,6 @@ The dashboard frontend (static HTML/JS/CSS) is served from
 from __future__ import annotations
 
 import os
-import re
 from typing import Any
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query
@@ -61,7 +60,9 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup() -> None:
     """Initialise the database schema on startup."""
-    db.init_db()
+    id_migration = db.init_db()
+    if id_migration:
+        print(f"AIQ: renumbered legacy employee ids to numeric ids: {id_migration}")
 
 
 # ---------------------------------------------------------------------------
@@ -92,12 +93,6 @@ def _require_api_key(x_api_key: str | None) -> str:
     if not employee_id:
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
     return employee_id
-
-
-def _slugify_employee_id(name: str | None) -> str:
-    base = (name or "employee").strip().lower()
-    base = re.sub(r"[^a-z0-9]+", "-", base).strip("-")
-    return base or "employee"
 
 
 def _rules_with_overrides() -> list[dict[str, Any]]:
@@ -205,8 +200,14 @@ def register(req: RegisterRequest) -> RegisterResponse:
 
     Returns a one-time-visible API key. The collector stores it in ~/.aiq/config.toml
     and sends it as X-API-Key on future /api/ingest calls.
+
+    employee_id is always a mothership-assigned numeric id, unless the caller
+    already supplies a numeric one (e.g. a future SSO/Azure AD integration
+    passing its own numeric object id) — human-readable slugs are ignored so
+    the id keeps meaning once real identity providers are wired in.
     """
-    employee_id = req.employee_id or _slugify_employee_id(req.name)
+    requested = (req.employee_id or "").strip()
+    employee_id = requested if requested.isdigit() else db.next_numeric_employee_id()
     result = db.register_employee_from_invite(
         req.invite_code,
         employee_id=employee_id,
@@ -281,6 +282,16 @@ def upsert_team(
     return {"status": "ok", "team": db.upsert_team(team_name, body.get("description"))}
 
 
+@app.delete("/api/teams/{team_name}")
+def delete_team(
+    team_name: str,
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    _require_admin(x_admin_key)
+    db.delete_team(team_name)
+    return {"status": "ok", "team": team_name}
+
+
 @app.put("/api/clients/{client_name}")
 def upsert_client(
     client_name: str,
@@ -289,6 +300,16 @@ def upsert_client(
 ) -> dict[str, Any]:
     _require_admin(x_admin_key)
     return {"status": "ok", "client": db.upsert_client(client_name, body.get("description"))}
+
+
+@app.delete("/api/clients/{client_name}")
+def delete_client(
+    client_name: str,
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    _require_admin(x_admin_key)
+    db.delete_client(client_name)
+    return {"status": "ok", "client": client_name}
 
 
 def _employee_detail_payload(employee_id: str) -> dict[str, Any] | None:
@@ -446,6 +467,13 @@ def assign_my_project(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok"}
+
+
+@app.get("/api/me/history")
+def my_history(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> list[dict[str, Any]]:
+    """Score history over time for the API key owner only (personal Activity tab)."""
+    employee_id = _require_api_key(x_api_key)
+    return db.get_employee_history(employee_id)
 
 
 @app.get("/api/employees/{employee_id}/history")
