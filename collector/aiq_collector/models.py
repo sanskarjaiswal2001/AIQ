@@ -61,9 +61,11 @@ class CodeBlock:
 class ToolUseRecord:
     """A single tool invocation parsed from an assistant content block."""
 
+    id: str = ""
     name: str = ""
     input: dict[str, Any] = field(default_factory=dict)
     file_path: str = ""
+    is_error: bool = False
 
     @property
     def is_write_tool(self) -> bool:
@@ -83,8 +85,10 @@ class ToolUseRecord:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "id": self.id,
             "name": self.name,
             "file_path": self.file_path,
+            "is_error": self.is_error,
         }
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shlex
 from pathlib import Path
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -144,6 +145,7 @@ class Analyzer:
         work_types = self._build_work_types(sessions)
         activity = self._build_activity(sessions)
         projects = self._build_projects(sessions)
+        tool_metrics = self._build_tool_metrics(sessions)
 
         return {
             "employee_id": employee_id,
@@ -158,6 +160,9 @@ class Analyzer:
             "work_types": work_types,
             "activity": activity,
             "projects": projects,
+            "tool_usage": tool_metrics["tool_usage"],
+            "command_usage": tool_metrics["command_usage"],
+            "quality_metrics": tool_metrics["quality_metrics"],
             "plan_context": plan_context,
         }
 
@@ -332,6 +337,37 @@ class Analyzer:
             for r in s.requests:
                 counts[classify_work_type(r.message)] += 1
         return dict(counts)
+
+    def _build_tool_metrics(self, sessions: list[Session]) -> dict[str, Any]:
+        tools: Counter[str] = Counter()
+        failures: Counter[str] = Counter()
+        commands: Counter[str] = Counter()
+        failed_commands = 0
+        test_commands = 0
+        test_bins = {"pytest", "unittest", "jest", "vitest", "npm", "pnpm", "yarn", "go", "cargo"}
+        for s in sessions:
+            for r in s.requests:
+                for t in r.tools_used:
+                    tool_name = t.name or "unknown"
+                    tools[tool_name] += 1
+                    if t.is_error:
+                        failures[tool_name] += 1
+                    command = t.input.get("command") if isinstance(t.input, dict) else ""
+                    if tool_name == "Bash" and isinstance(command, str) and command.strip():
+                        try:
+                            exe = os.path.basename(shlex.split(command)[0])
+                        except (IndexError, ValueError):
+                            exe = command.split()[0]
+                        commands[exe] += 1
+                        if t.is_error:
+                            failed_commands += 1
+                        if exe in test_bins or "test" in command.lower():
+                            test_commands += 1
+        return {
+            "tool_usage": {"by_tool": dict(tools), "failures_by_tool": dict(failures)},
+            "command_usage": {"by_executable": dict(commands)},
+            "quality_metrics": {"failed_commands": failed_commands, "test_commands": test_commands},
+        }
 
     # -- activity -----------------------------------------------------------
 

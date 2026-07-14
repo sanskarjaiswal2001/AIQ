@@ -472,8 +472,10 @@ class ClaudeLogParser:
                 content = msg.get("content")
                 text = _extract_user_text(content)
                 if text is None:
-                    # tool-result array or skipped wrapper — attach cancellation
-                    # marker if applicable, but don't start a new request
+                    # tool-result array or skipped wrapper — attach result/cancel
+                    # metadata, but don't start a new request.
+                    if current and isinstance(content, list):
+                        self._attach_tool_results(ln, current)
                     if current and isinstance(content, str):
                         if content.strip().startswith("[Request interrupted"):
                             current.is_canceled = True
@@ -552,7 +554,7 @@ class ClaudeLogParser:
             inp_data = block.get("input") or {}
             if not isinstance(inp_data, dict):
                 inp_data = {}
-            tool = ToolUseRecord(name=name, input=inp_data)
+            tool = ToolUseRecord(id=block.get("id", "") or "", name=name, input=inp_data)
             self._classify_tool(tool, req)
             req.tools_used.append(tool)
 
@@ -598,6 +600,19 @@ class ClaudeLogParser:
             skill_name = inp.get("skill") or inp.get("skill_name") or ""
             if isinstance(skill_name, str) and skill_name:
                 req.skills_used.append(skill_name)
+
+    def _attach_tool_results(self, ln: dict[str, Any], req: SessionRequest) -> None:
+        content = (ln.get("message") or {}).get("content") or []
+        result = ln.get("toolUseResult") or {}
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            tool_id = block.get("tool_use_id") or ""
+            is_error = bool(block.get("is_error") or result.get("stderr") or result.get("interrupted"))
+            for tool in reversed(req.tools_used):
+                if tool.id == tool_id:
+                    tool.is_error = tool.is_error or is_error
+                    break
 
 
 # ---------------------------------------------------------------------------
