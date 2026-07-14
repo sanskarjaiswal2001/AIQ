@@ -101,18 +101,46 @@ Find the host's LAN address:
 - `hostname` → e.g. `Konis-MacBook.local` (mDNS `.local` name, survives DHCP/IP changes, works cross-platform on the same network) — **preferred**
 - `ipconfig getifaddr en0` (macOS) / `ipconfig` (Windows) / `ip addr` (Linux) → raw IP, fallback if `.local` doesn't resolve
 
+You have two registration options — **lobby mode** (easier for group demos, no pre-generated codes needed) or **invite-code mode** (more controlled, admin creates codes upfront).
+
+**Option A: Lobby mode (recommended for group demos)**
+
+Everyone self-registers into the lobby, then the host accepts them from the TUI:
+
+```bash
+# On every collector laptop (including the host's own):
+cd AIQ/collector
+python3 -m aiq_collector.cli register --server-url http://<host-hostname-or-ip>:8000 \
+  --lobby --name "Your Name" --email you@company.com
+# → prints a 6-digit lobby ID, status: pending
+
+# On the host laptop — review and accept pending devices:
+python scripts/aiq-mothership.py lobby --server-url http://localhost:8000
+# TUI: ↑↓ navigate, SPACE to select, 'a' to accept (generates invite codes),
+# 'r' to reject, 'R' to refresh, 'q' to quit
+# After accepting, share the invite codes shown, OR tell each person to re-run:
+#   aiq register --server-url http://<host>:8000 --lobby-id <their-lobby-id>
+# → auto-detects acceptance, pulls the invite code, and completes registration
+```
+
+**Option B: Invite-code mode**
+
 Create one invite per person (or one invite with `--uses-remaining N`):
 
 ```bash
 python scripts/aiq-mothership.py create-invite --team Demo --uses-remaining 5
 ```
 
-**On every collector laptop (including the host's own):**
-
 ```bash
+# On every collector laptop (including the host's own):
 cd AIQ/collector
 python3 -m aiq_collector.cli register --server-url http://<host-hostname-or-ip>:8000 \
   --invite-code <code> --name "Your Name" --email you@company.com
+```
+
+Either way, run collection after registration:
+
+```bash
 python3 -m aiq_collector.cli collect
 ```
 
@@ -160,21 +188,26 @@ Use this flow:
    - If my OS account full name is available, use it as the default display name.
    - Otherwise ask me for my preferred display name and team.
    - Do not invent an employee ID (no slugs like jane-doe or local-user) — the mothership assigns a numeric employee ID automatically on registration.
-7. Create an invite:
-   python scripts/aiq-mothership.py create-invite --server-url http://127.0.0.1:8000 --team Local
-   Save the invite code from the JSON response.
+7. Register me using lobby mode (no invite code needed, simpler for solo setup):
+   aiq register --server-url http://127.0.0.1:8000 --lobby --name "<My Real Name>" --team "<My Team>"
+   This prints a 6-digit lobby ID. Then accept it from the admin TUI:
+   python scripts/aiq-mothership.py lobby --server-url http://127.0.0.1:8000
+   In the TUI, press SPACE to select my entry, then 'a' to accept. An invite code is generated.
+   Then complete registration:
+   aiq register --server-url http://127.0.0.1:8000 --lobby-id <LOBBY_ID>
+   Alternatively, skip lobby and use an invite code directly:
+   python scripts/aiq-mothership.py create-invite --server-url http://127.0.0.1:8000 --team "<My Team>"
+   aiq register --server-url http://127.0.0.1:8000 --invite-code <INVITE_CODE> --name "<My Real Name>" --team "<My Team>"
+   The server prints back the numeric employee ID it assigned — note it, but don't pass your own --employee-id.
 8. Install the collector from the local repo:
    cd collector
    python -m pip install -e .
-9. Register me with the invite code using my real display name:
-   aiq register --server-url http://127.0.0.1:8000 --invite-code <INVITE_CODE> --name "<My Real Name>" --team "<My Team>"
-   The server prints back the numeric employee ID it assigned — note it, but don't pass your own --employee-id.
-10. If I provide plan details, configure them before collection, for example:
+9. If I provide plan details, configure them before collection, for example:
    aiq config --plan-type claude_team_standard --plan-name "Claude Team Standard" --rolling-window-usd 25 --rolling-window-days 30 --seat-cost-usd 25
-11. Run one collection:
+10. Run one collection:
    aiq collect --harnesses auto
    If logs are elsewhere, use the matching override such as --claude-dir, --codex-dir, --opencode-dir, --cursor-dir, or --copilot-dir.
-12. Read the API key from `.aiq/config.toml` or `~/.aiq/config.toml` and open these URLs:
+11. Read the API key from `.aiq/config.toml` or `~/.aiq/config.toml` and open these URLs:
    - Management dashboard: http://127.0.0.1:8000
    - Personal dashboard: http://127.0.0.1:8000/me?api_key=<API_KEY>
    The browser stores the key locally and removes it from the address bar.
