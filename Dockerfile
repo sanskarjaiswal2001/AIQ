@@ -36,7 +36,6 @@ COPY dashboard/ /app/dashboard/
 ENV PYTHONPATH=/app/server \
     DB_PATH=/data/aiq.db \
     DASHBOARD_DIR=/app/dashboard \
-    AIQ_ADMIN_KEY="" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
