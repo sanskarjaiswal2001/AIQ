@@ -19,6 +19,7 @@ import os
 import platform
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -308,7 +309,106 @@ def command_register(args: argparse.Namespace) -> int:
         return 1
     if not email:
         print("WARNING: could not infer employee email. Add --email now or set it later in the mothership admin dashboard.", file=sys.stderr)
-    endpoint = args.server_url.rstrip("/") + "/api/register"
+
+    server_url = args.server_url
+
+    # --- Mode A: --lobby-id (check status, complete if accepted) ---
+    if args.lobby_id:
+        status_url = server_url.rstrip("/") + f"/api/lobby/{args.lobby_id}/status"
+        try:
+            with urllib.request.urlopen(status_url, timeout=15) as resp:
+                lobby_data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                print(f"Lobby ID {args.lobby_id} not found.", file=sys.stderr)
+            else:
+                print(f"Lobby status check failed: HTTP {exc.code}", file=sys.stderr)
+            return 1
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"Could not reach {status_url}: {exc}", file=sys.stderr)
+            return 1
+        except json.JSONDecodeError as exc:
+            print(f"Lobby status check failed: server response was not valid JSON ({exc}).", file=sys.stderr)
+            return 1
+
+        lobby_status = lobby_data.get("status", "pending")
+        if lobby_status == "pending":
+            print(f"Lobby ID {args.lobby_id} is still pending admin approval. Check again later.")
+            return 0
+        if lobby_status == "rejected":
+            print(f"Lobby ID {args.lobby_id} was rejected by the admin.")
+            return 1
+        if lobby_status in ("accepted", "onboarded"):
+            invite_code = lobby_data.get("invite_code")
+            if not invite_code:
+                print(f"Lobby ID {args.lobby_id} is accepted but no invite code was returned. Contact the admin.", file=sys.stderr)
+                return 1
+            print(f"Lobby ID {args.lobby_id} accepted! Using invite code to complete registration...")
+            args.invite_code = invite_code
+            # Fall through to invite-code registration below
+        else:
+            print(f"Unknown lobby status: {lobby_status}", file=sys.stderr)
+            return 1
+
+    # --- Mode B: --lobby (enter lobby) ---
+    if args.lobby and not args.invite_code:
+        hostname = socket.gethostname() or ""
+        platform_str = platform.platform() or ""
+        endpoint = server_url.rstrip("/") + "/api/register"
+        payload = {
+            "lobby": True,
+            "name": name,
+            "email": email,
+            "team": args.team or "",
+            "employee_id": employee_id,
+            "hostname": hostname,
+            "platform": platform_str,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                err_body = json.loads(exc.read().decode("utf-8", errors="replace"))
+                detail = f" — {err_body.get('detail', err_body)}"
+            except Exception:
+                pass
+            print(f"Lobby registration failed: HTTP {exc.code}{detail}", file=sys.stderr)
+            return 1
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"Lobby registration failed: could not reach {endpoint} ({exc}). Check the server is running and the URL/port are correct.", file=sys.stderr)
+            return 1
+        except json.JSONDecodeError as exc:
+            print(f"Lobby registration failed: server response was not valid JSON ({exc}).", file=sys.stderr)
+            return 1
+
+        lobby_id = data.get("lobby_id", "")
+        if not lobby_id:
+            print(f"Lobby registration failed: missing lobby_id in response: {data}", file=sys.stderr)
+            return 1
+        save_state(lobby_id=lobby_id, lobby_status="pending")
+        print(f"Lobby registration accepted. You are now in the lobby.")
+        print(f"  Lobby ID: {lobby_id}")
+        print(f"  Status: pending")
+        print(f"  Name: {name}")
+        if args.team:
+            print(f"  Team: {args.team}")
+        print(f"\nWait for admin approval. Then complete registration with:")
+        print(f"  aiq register --server-url {server_url} --lobby-id {lobby_id}")
+        return 0
+
+    # --- Mode C: --invite-code (existing flow) ---
+    if not args.invite_code:
+        print("Registration requires either --invite-code, --lobby, or --lobby-id.", file=sys.stderr)
+        print("  --lobby         Join the lobby (admin must accept you)")
+        print("  --lobby-id ID   Check lobby status and complete if accepted")
+        print("  --invite-code   Register directly with an invite code", file=sys.stderr)
+        return 1
+
+    endpoint = server_url.rstrip("/") + "/api/register"
     payload = {
         "invite_code": args.invite_code,
         "name": name,
@@ -324,8 +424,8 @@ def command_register(args: argparse.Namespace) -> int:
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
-            body = json.loads(exc.read().decode("utf-8", errors="replace"))
-            detail = f" — {body.get('detail', body)}"
+            err_body = json.loads(exc.read().decode("utf-8", errors="replace"))
+            detail = f" — {err_body.get('detail', err_body)}"
         except Exception:
             pass
         print(f"Registration failed: HTTP {exc.code}{detail}", file=sys.stderr)
@@ -345,7 +445,8 @@ def command_register(args: argparse.Namespace) -> int:
         print(f"Registration response missing api_key/employee_id: {data}", file=sys.stderr)
         return 1
 
-    update_config(server_url=args.server_url, api_key=api_key, employee_id=employee_id, employee_name=employee_name, employee_email=employee_email)
+    update_config(server_url=server_url, api_key=api_key, employee_id=employee_id, employee_name=employee_name, employee_email=employee_email)
+    save_state(lobby_status="onboarded")
     who = f"{employee_name} ({employee_id})" if employee_name else employee_id
     print(f"Registered employee {who}. Config saved to {CONFIG_PATH}")
     return 0
@@ -695,7 +796,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_register = sub.add_parser("register", help="Register with a mothership using an invite code")
     p_register.add_argument("--server-url", required=True, help="Mothership server URL")
-    p_register.add_argument("--invite-code", required=True, help="Invite code from admin")
+    p_register.add_argument("--invite-code", required=False, default="", help="Invite code from admin")
+    p_register.add_argument("--lobby", action="store_true", help="Register in lobby mode (no invite code needed; admin must accept you)")
+    p_register.add_argument("--lobby-id", default="", help="Check lobby status and complete registration if accepted")
     p_register.add_argument("--name", default="", help="Employee display name; defaults to git/OS identity when available")
     p_register.add_argument("--email", default="", help="Employee email; defaults to git config user.email when available")
     p_register.add_argument("--team", default="", help="Team name")

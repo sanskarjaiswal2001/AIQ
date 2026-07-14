@@ -106,11 +106,14 @@ class HealthResponse(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    invite_code: str
+    invite_code: str | None = None
+    lobby: bool = False
     employee_id: str | None = None
     name: str | None = None
     email: str | None = None
     team: str | None = None
+    hostname: str | None = None
+    platform: str | None = None
 
 
 class RegisterResponse(BaseModel):
@@ -132,6 +135,29 @@ class InviteCreateResponse(BaseModel):
     code: str
     team: str | None = None
     uses_remaining: int
+
+
+class LobbyRegisterResponse(BaseModel):
+    lobby_id: str
+    status: str = "pending"
+    name: str | None = None
+    email: str | None = None
+    team: str | None = None
+    employee_id: str | None = None
+
+
+class LobbyAcceptRequest(BaseModel):
+    lobby_ids: list[str] = Field(default_factory=list)
+    team: str | None = None
+
+
+class LobbyAcceptItem(BaseModel):
+    lobby_id: str
+    invite_code: str
+    name: str | None = None
+    email: str | None = None
+    team: str | None = None
+    employee_id: str | None = None
 
 
 class MessageResponse(BaseModel):

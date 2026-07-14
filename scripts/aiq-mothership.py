@@ -176,6 +176,143 @@ def command_create_invite(args: argparse.Namespace) -> int:
     return 0 if 200 <= code < 300 else 1
 
 
+def command_lobby(args: argparse.Namespace) -> int:
+    """Interactive TUI to manage the lobby."""
+    import curses
+
+    server_url = args.server_url.rstrip("/")
+    admin_key = args.admin_key or _read_env_file().get("AIQ_ADMIN_KEY", "")
+    headers = {"X-Admin-Key": admin_key} if admin_key else {}
+
+    def fetch_pending() -> list[dict[str, Any]]:
+        code, data = _request_json(server_url + "/api/admin/lobby?status=pending", headers=headers)
+        if code != 200 or not isinstance(data, list):
+            return []
+        return data
+
+    def accept_entries(lobby_ids: list[str], team: str = "") -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {"lobby_ids": lobby_ids}
+        if team:
+            payload["team"] = team
+        code, data = _request_json(server_url + "/api/admin/lobby/accept", method="POST", payload=payload, headers=headers)
+        if code != 200 or not isinstance(data, list):
+            return []
+        return data
+
+    def reject_entries(lobby_ids: list[str]) -> int:
+        code, data = _request_json(server_url + "/api/admin/lobby/reject", method="POST", payload={"lobby_ids": lobby_ids}, headers=headers)
+        if isinstance(data, dict):
+            return data.get("rejected", 0)
+        return 0
+
+    curses.wrapper(lambda scr: _lobby_tui(scr, fetch_pending, accept_entries, reject_entries))
+    return 0
+
+
+def _lobby_tui(stdscr, fetch_pending, accept_entries, reject_entries) -> None:
+    import curses
+
+    curses.curs_set(0)
+    stdscr.keypad(True)
+
+    entries: list[dict[str, Any]] = []
+    selected: set[str] = set()
+    cursor = 0
+    message = ""
+    accepted_codes: list[dict[str, Any]] = []
+    show_codes = False
+
+    def reload():
+        nonlocal entries, cursor
+        entries = fetch_pending()
+        current_ids = {e.get("lobby_id") for e in entries}
+        selected.difference_update(selected - current_ids)
+        if entries and cursor >= len(entries):
+            cursor = len(entries) - 1
+        if not entries:
+            cursor = 0
+
+    reload()
+
+    while True:
+        stdscr.clear()
+        h, w = stdscr.getmaxyx()
+
+        title = "AIQ Lobby — Pending Registrations"
+        stdscr.addstr(0, 0, title[:w - 1], curses.A_BOLD)
+        stdscr.addstr(1, 0, f"{len(entries)} pending · {len(selected)} selected · ↑↓ navigate · SPACE select · a accept · r reject · R refresh · q quit"[:w - 1])
+
+        if show_codes and accepted_codes:
+            stdscr.addstr(3, 0, "─ Accepted — share these invite codes:"[:w - 1], curses.A_BOLD)
+            for i, item in enumerate(accepted_codes):
+                line = f"  [{item.get('lobby_id')}] {item.get('name', '?')}: {item.get('invite_code', '')}"
+                if 4 + i < h:
+                    stdscr.addstr(4 + i, 0, line[:w - 1])
+            stdscr.addstr(4 + len(accepted_codes) + 1, 0, "Press any key to continue..."[:w - 1])
+            stdscr.getch()
+            show_codes = False
+            accepted_codes = []
+            reload()
+            continue
+
+        if message:
+            stdscr.addstr(3, 0, message[:w - 1], curses.A_REVERSE)
+
+        start_row = 5
+        for i, entry in enumerate(entries):
+            if start_row + i >= h - 1:
+                break
+            lid = entry.get("lobby_id", "")
+            name = entry.get("name", "?")
+            email = entry.get("email", "")
+            team = entry.get("team", "")
+            emp_id = entry.get("employee_id", "")
+            mark = "► " if i == cursor else "  "
+            sel = "[*]" if lid in selected else "[ ]"
+            line = f"{mark}{sel} {lid}  {name}  {email}  team={team}  id={emp_id}"
+            attr = curses.A_REVERSE if i == cursor else curses.A_NORMAL
+            stdscr.addstr(start_row + i, 0, line[:w - 1], attr)
+
+        if not entries:
+            stdscr.addstr(start_row, 0, "No pending lobby entries. Press R to refresh, q to quit."[:w - 1])
+
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        message = ""
+
+        if key == curses.KEY_UP and entries:
+            cursor = (cursor - 1) % len(entries)
+        elif key == curses.KEY_DOWN and entries:
+            cursor = (cursor + 1) % len(entries)
+        elif key == ord(' ') and entries:
+            lid = entries[cursor].get("lobby_id", "")
+            if lid in selected:
+                selected.discard(lid)
+            else:
+                selected.add(lid)
+        elif key == ord('a') and selected:
+            ids = list(selected)
+            accepted_codes = accept_entries(ids)
+            selected.clear()
+            if accepted_codes:
+                show_codes = True
+            else:
+                message = "Accept failed — no entries were accepted."
+                reload()
+        elif key == ord('r') and selected:
+            ids = list(selected)
+            count = reject_entries(ids)
+            selected.clear()
+            message = f"Rejected {count} entry(ies)."
+            reload()
+        elif key == ord('R'):
+            reload()
+            message = f"Refreshed. {len(entries)} pending."
+        elif key == ord('q') or key == 27:
+            break
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aiq-mothership", description="Run AIQ mothership natively without Docker")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -207,6 +344,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_invite.add_argument("--uses-remaining", type=int, default=1, help="Invite uses")
     p_invite.add_argument("--code", default="", help="Optional invite code")
     p_invite.set_defaults(func=command_create_invite)
+
+    p_lobby = sub.add_parser("lobby", help="Interactive TUI to manage the lobby")
+    p_lobby.add_argument("--server-url", default="http://localhost:8000", help="Mothership URL")
+    p_lobby.add_argument("--admin-key", default="", help="Admin key (defaults to .env AIQ_ADMIN_KEY)")
+    p_lobby.set_defaults(func=command_lobby)
+
     return parser
 
 

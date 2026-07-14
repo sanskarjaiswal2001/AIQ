@@ -241,6 +241,22 @@ CREATE TABLE IF NOT EXISTS employee_plan_overrides (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (employee_id) REFERENCES employees(id)
 );
+
+CREATE TABLE IF NOT EXISTS lobby (
+    lobby_id TEXT PRIMARY KEY,
+    name TEXT,
+    email TEXT,
+    team TEXT,
+    employee_id TEXT,
+    hostname TEXT,
+    platform TEXT,
+    status TEXT DEFAULT 'pending',
+    invite_code TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    accepted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_lobby_status ON lobby(status);
 """
 
 
@@ -470,6 +486,81 @@ def register_employee_from_invite(
             (employee_id, key_hash, key_prefix),
         )
     return {"employee_id": employee_id, "api_key": api_key, "key_prefix": key_prefix, "name": name, "email": email, "team": effective_team}
+
+
+def _generate_lobby_id(conn: sqlite3.Connection) -> str:
+    """Generate a unique 6-digit lobby ID."""
+    while True:
+        lobby_id = str(secrets.randbelow(900000) + 100000)
+        if not conn.execute("SELECT 1 FROM lobby WHERE lobby_id = ?", (lobby_id,)).fetchone():
+            return lobby_id
+
+
+def add_to_lobby(*, name: str = "", email: str = "", team: str = "", employee_id: str = "", hostname: str = "", platform: str = "") -> dict[str, Any]:
+    """Add a device to the lobby (pending registration). Returns the lobby entry."""
+    with db() as conn:
+        lobby_id = _generate_lobby_id(conn)
+        conn.execute(
+            "INSERT INTO lobby (lobby_id, name, email, team, employee_id, hostname, platform) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (lobby_id, name, email, team, employee_id, hostname, platform),
+        )
+    return {"lobby_id": lobby_id, "name": name, "email": email, "team": team, "employee_id": employee_id, "status": "pending"}
+
+
+def list_lobby(status: str | None = None) -> list[dict[str, Any]]:
+    with db() as conn:
+        if status:
+            rows = conn.execute("SELECT * FROM lobby WHERE status = ? ORDER BY created_at DESC", (status,)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM lobby ORDER BY created_at DESC").fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
+def accept_lobby_entries(lobby_ids: list[str], team: str | None = None) -> list[dict[str, Any]]:
+    """Accept lobby entries: generate a 1-use invite code for each, mark as accepted."""
+    results = []
+    with db() as conn:
+        for lobby_id in lobby_ids:
+            row = conn.execute("SELECT * FROM lobby WHERE lobby_id = ? AND status = 'pending'", (lobby_id,)).fetchone()
+            if not row:
+                continue
+            invite_code = "inv_lobby_" + secrets.token_urlsafe(8)
+            effective_team = team or row["team"] or ""
+            conn.execute("INSERT INTO invite_codes (code, team, uses_remaining) VALUES (?, ?, 1)", (invite_code, effective_team))
+            conn.execute("UPDATE lobby SET status = 'accepted', invite_code = ?, accepted_at = CURRENT_TIMESTAMP WHERE lobby_id = ?", (invite_code, lobby_id))
+            results.append({
+                "lobby_id": lobby_id,
+                "invite_code": invite_code,
+                "name": row["name"],
+                "email": row["email"],
+                "team": effective_team,
+                "employee_id": row["employee_id"],
+            })
+    return results
+
+
+def reject_lobby_entries(lobby_ids: list[str]) -> int:
+    """Reject lobby entries. Returns count of rejected entries."""
+    count = 0
+    with db() as conn:
+        for lobby_id in lobby_ids:
+            cur = conn.execute("UPDATE lobby SET status = 'rejected' WHERE lobby_id = ? AND status = 'pending'", (lobby_id,))
+            count += cur.rowcount
+    return count
+
+
+def mark_lobby_onboarded(invite_code: str) -> None:
+    """Mark a lobby entry as onboarded when its invite code is consumed."""
+    if not invite_code:
+        return
+    with db() as conn:
+        conn.execute("UPDATE lobby SET status = 'onboarded' WHERE invite_code = ?", (invite_code,))
+
+
+def get_lobby_entry(lobby_id: str) -> dict[str, Any] | None:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM lobby WHERE lobby_id = ?", (lobby_id,)).fetchone()
+        return _row_to_dict(row) if row else None
 
 
 def create_employee_api_key(employee_id: str) -> dict[str, Any]:

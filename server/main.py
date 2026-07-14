@@ -30,6 +30,8 @@ from models import (
     IngestResponse,
     InviteCreateRequest,
     InviteCreateResponse,
+    LobbyAcceptRequest,
+    LobbyRegisterResponse,
     RegisterRequest,
     RegisterResponse,
 )
@@ -194,18 +196,32 @@ def ingest(req: IngestRequest, x_api_key: str | None = Header(default=None, alia
     return IngestResponse(status="ok", snapshot_id=snapshot_id)
 
 
-@app.post("/api/register", response_model=RegisterResponse)
-def register(req: RegisterRequest) -> RegisterResponse:
-    """Register an employee collector with an invite code.
+@app.post("/api/register")
+def register(req: RegisterRequest):
+    """Register an employee collector.
 
-    Returns a one-time-visible API key. The collector stores it in ~/.aiq/config.toml
-    and sends it as X-API-Key on future /api/ingest calls.
-
-    employee_id is always a mothership-assigned numeric id, unless the caller
-    already supplies a numeric one (e.g. a future SSO/Azure AD integration
-    passing its own numeric object id) — human-readable slugs are ignored so
-    the id keeps meaning once real identity providers are wired in.
+    Two modes:
+    1. Lobby mode (lobby=true): device enters a pending lobby state.
+       Returns a lobby_id (6-digit code). Admin later accepts via TUI/API,
+       which generates an invite code. The user re-registers with --lobby-id
+       or --invite-code to complete onboarding.
+    2. Invite-code mode (default): existing flow. Consumes an invite code
+       and returns a one-time API key.
     """
+    if req.lobby:
+        entry = db.add_to_lobby(
+            name=req.name or "",
+            email=req.email or "",
+            team=req.team or "",
+            employee_id=req.employee_id or "",
+            hostname=req.hostname or "",
+            platform=req.platform or "",
+        )
+        return LobbyRegisterResponse(**entry)
+
+    if not req.invite_code:
+        raise HTTPException(status_code=400, detail="invite_code is required when not using lobby mode")
+
     requested = (req.employee_id or "").strip()
     employee_id = requested if requested.isdigit() else db.next_numeric_employee_id()
     result = db.register_employee_from_invite(
@@ -217,6 +233,7 @@ def register(req: RegisterRequest) -> RegisterResponse:
     )
     if result is None:
         raise HTTPException(status_code=400, detail="Invalid or exhausted invite code")
+    db.mark_lobby_onboarded(req.invite_code)
     return RegisterResponse(**result)
 
 
@@ -241,6 +258,62 @@ def admin_list_invites(x_admin_key: str | None = Header(default=None, alias="X-A
     """List registration invites. Protected by X-Admin-Key when configured."""
     _require_admin(x_admin_key)
     return db.list_invites()
+
+
+@app.get("/api/admin/lobby")
+def admin_list_lobby(
+    status: str | None = Query(None, description="Filter by status: pending, accepted, rejected, onboarded"),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> list[dict[str, Any]]:
+    """List lobby entries. Protected by X-Admin-Key when configured."""
+    _require_admin(x_admin_key)
+    return db.list_lobby(status=status)
+
+
+@app.post("/api/admin/lobby/accept")
+def admin_accept_lobby(
+    req: LobbyAcceptRequest,
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> list[dict[str, Any]]:
+    """Accept lobby entries: generates a 1-use invite code for each. Protected."""
+    _require_admin(x_admin_key)
+    if not req.lobby_ids:
+        raise HTTPException(status_code=400, detail="lobby_ids must not be empty")
+    results = db.accept_lobby_entries(req.lobby_ids, team=req.team)
+    if not results:
+        raise HTTPException(status_code=404, detail="No pending lobby entries found for the given IDs")
+    return results
+
+
+@app.post("/api/admin/lobby/reject")
+def admin_reject_lobby(
+    body: dict[str, Any] = Body(...),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> dict[str, Any]:
+    """Reject lobby entries. Protected."""
+    _require_admin(x_admin_key)
+    lobby_ids = body.get("lobby_ids") or []
+    if not lobby_ids and body.get("lobby_id"):
+        lobby_ids = [body["lobby_id"]]
+    if not lobby_ids:
+        raise HTTPException(status_code=400, detail="lobby_ids must not be empty")
+    rejected = db.reject_lobby_entries(lobby_ids)
+    return {"status": "ok", "rejected": rejected}
+
+
+@app.get("/api/lobby/{lobby_id}/status")
+def lobby_status(lobby_id: str) -> dict[str, Any]:
+    """Public endpoint: check lobby registration status.
+
+    Returns the invite_code when accepted/onboarded so the client can
+    automatically complete registration without manual code sharing.
+    """
+    entry = db.get_lobby_entry(lobby_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Lobby ID not found")
+    status = entry.get("status", "pending")
+    invite_code = entry.get("invite_code") if status in ("accepted", "onboarded") else None
+    return {"lobby_id": lobby_id, "status": status, "invite_code": invite_code}
 
 
 @app.get("/api/org/directory")
