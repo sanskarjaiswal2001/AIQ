@@ -1,4 +1,4 @@
-"""End-to-end test script for the AIECO dashboard backend.
+"""End-to-end test script for the AIQ dashboard backend.
 
 Starts the server is expected to already be running on port 8000.
 Posts mock snapshots for several employees, then verifies every endpoint.

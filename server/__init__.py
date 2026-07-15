@@ -1,4 +1,4 @@
-"""AIECO Dashboard backend server.
+"""AIQ Dashboard backend server.
 
 FastAPI + SQLite backend that ingests employee AI usage metrics from edge
 collectors, aggregates them, computes training and plan recommendations,

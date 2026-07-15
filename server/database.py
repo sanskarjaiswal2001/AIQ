@@ -1,8 +1,8 @@
-"""SQLite data layer for the AIECO dashboard.
+"""SQLite data layer for the AIQ dashboard.
 
 Responsibilities:
   * Open a connection to the SQLite DB (path from ``DB_PATH`` env var,
-    default ``./aieco.db``) and enable WAL mode for concurrent reads.
+    default ``./aiq.db``) and enable WAL mode for concurrent reads.
   * Initialise the schema (employees, snapshots, metrics_summary,
     anti_patterns) on startup.
   * Provide query functions used by the API layer in ``main.py``.
@@ -26,7 +26,7 @@ from typing import Any, Iterator
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_DB_PATH = "./aieco.db"
+DEFAULT_DB_PATH = "./aiq.db"
 
 
 def get_db_path() -> str:

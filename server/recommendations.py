@@ -1,4 +1,4 @@
-"""Recommendation engine for the AIECO dashboard.
+"""Recommendation engine for the AIQ dashboard.
 
 Two responsibilities:
   1. ``training_recommendations`` — map triggered anti-patterns to specific

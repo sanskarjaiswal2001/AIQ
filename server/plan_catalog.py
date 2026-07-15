@@ -1,7 +1,7 @@
 """Structured catalog of AI provider subscription plans.
 
 This module is a pure-data catalog (no DB / no FastAPI dependency) describing
-every subscription plan offered by the AI coding assistants that AIECO tracks:
+every subscription plan offered by the AI coding assistants that AIQ tracks:
 Claude (Anthropic), Codex (OpenAI / ChatGPT), GitHub Copilot, and the generic
 "OpenCode / custom" buckets.
 

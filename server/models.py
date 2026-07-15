@@ -1,4 +1,4 @@
-"""Pydantic models for the AIECO dashboard API.
+"""Pydantic models for the AIQ dashboard API.
 
 Models are intentionally flexible: the collector payload contains dynamic
 fields (model_usage, activity, work_types) whose shape may evolve, so those

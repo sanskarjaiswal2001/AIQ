@@ -1,4 +1,4 @@
-"""FastAPI application for the AIECO dashboard backend.
+"""FastAPI application for the AIQ dashboard backend.
 
 Exposes:
   POST /api/ingest                    - receive a collector snapshot
@@ -9,8 +9,8 @@ Exposes:
   GET  /api/rules                     - static anti-pattern rule metadata
   GET  /api/health                    - health check
 
-The dashboard frontend (static HTML/JS/CSS) is served from
-``/data/aieco-dashboard/dashboard/`` at the root path ``/`` via StaticFiles.
+The dashboard frontend (static HTML/JS/CSS) is served from the configured
+``DASHBOARD_DIR`` at the root path ``/`` via StaticFiles.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="AIECO Dashboard API",
+    title="AIQ Dashboard API",
     description="AI engineering efficiency dashboard backend.",
     version="0.1.0",
 )
@@ -1016,7 +1016,7 @@ def plans_catalog() -> dict[str, Any]:
 # Static frontend serving
 # ---------------------------------------------------------------------------
 
-DASHBOARD_DIR = os.environ.get("DASHBOARD_DIR", "/data/aieco-dashboard/dashboard")
+DASHBOARD_DIR = os.environ.get("DASHBOARD_DIR", "/app/dashboard")
 
 
 @app.get("/me")
@@ -1041,7 +1041,7 @@ def _mount_static() -> None:
         @app.get("/")
         def _root() -> dict[str, Any]:
             return {
-                "name": "AIECO Dashboard API",
+                "name": "AIQ Dashboard API",
                 "status": "running",
                 "dashboard": f"not mounted (no files in {DASHBOARD_DIR})",
                 "docs": "/docs",
