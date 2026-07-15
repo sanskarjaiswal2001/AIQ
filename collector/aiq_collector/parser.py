@@ -603,7 +603,9 @@ class ClaudeLogParser:
 
     def _attach_tool_results(self, ln: dict[str, Any], req: SessionRequest) -> None:
         content = (ln.get("message") or {}).get("content") or []
-        result = ln.get("toolUseResult") or {}
+        result = ln.get("toolUseResult")
+        if not isinstance(result, dict):
+            result = {}
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue

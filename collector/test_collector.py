@@ -252,6 +252,33 @@ class TestParser:
         assert len(sessions) == 1
         assert len(sessions[0].requests) == 2  # only 2 real prompts
 
+    def test_tool_use_result_as_list_does_not_crash(self, tmp_path):
+        """toolUseResult is sometimes a list (e.g. multi-block tool output), not a dict."""
+        project_dir = tmp_path / "-home-user-app"
+        project_dir.mkdir()
+        jsonl = project_dir / "test.jsonl"
+
+        lines = [
+            _make_user_line("First prompt"),
+            _make_assistant_line([
+                {"type": "tool_use", "name": "Bash", "id": "t1", "input": {"command": "ls"}},
+            ]),
+            {
+                "type": "user",
+                "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "file1\nfile2", "is_error": False}
+                ]},
+                "toolUseResult": ["file1", "file2"],
+                "uuid": "u2", "timestamp": "2026-06-01T10:05:00Z",
+                "sessionId": "test-session", "version": "2.1.141", "gitBranch": "main",
+            },
+        ]
+        _write_session_jsonl(jsonl, lines)
+
+        parser = ClaudeLogParser(claude_dir=str(tmp_path))
+        sessions = parser.parse_directory()
+        assert len(sessions) == 1
+
     def test_skip_command_wrappers(self, tmp_path):
         """Lines starting with <command- or <local-command- should be skipped."""
         project_dir = tmp_path / "-app"
