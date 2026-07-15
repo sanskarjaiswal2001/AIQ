@@ -449,6 +449,7 @@ def command_register(args: argparse.Namespace) -> int:
     save_state(lobby_status="onboarded")
     who = f"{employee_name} ({employee_id})" if employee_name else employee_id
     print(f"Registered employee {who}. Config saved to {CONFIG_PATH}")
+    print(f"Personal dashboard: {server_url.rstrip('/')}/me?api_key={api_key}")
     return 0
 
 
